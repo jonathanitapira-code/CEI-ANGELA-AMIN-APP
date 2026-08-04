@@ -3,8 +3,13 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<meta name="theme-color" content="#d13b2e" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="CEI Ângela Amin" />
 <title>CEI Ângela Amin</title>
 <link rel="icon" href="/logo-icon.png" />
+<link rel="apple-touch-icon" href="/icon-apple-180.png" />
 <link rel="manifest" href="/manifest.json" />
 <link rel="stylesheet" href="/style.css" />
 </head>
@@ -14,6 +19,11 @@
 <div id="auth-screen">
   <div class="auth-card">
     <div class="logo-wrap"><img src="/logo.png" alt="CEI Ângela Amin - Centro de Educação Infantil" /></div>
+
+    <button type="button" class="btn ghost btn-install-app hidden" style="width:100%;margin-bottom:10px">📲 Instalar app no celular</button>
+    <div id="ios-install-hint" class="ios-install-hint hidden">
+      📲 Para instalar: toque no ícone de <b>Compartilhar</b> do navegador e depois em <b>"Adicionar à Tela de Início"</b>.
+    </div>
 
     <div id="invite-banner" class="invite-banner hidden"></div>
 
@@ -100,6 +110,7 @@
       <span id="user-name"></span>
       <span id="user-role-badge" class="role-badge"></span>
     </div>
+    <button class="btn ghost btn-install-app hidden" title="Instalar aplicativo no celular">📲 Instalar</button>
     <button class="btn ghost" id="btn-logout">Sair</button>
   </div>
 

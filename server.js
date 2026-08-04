@@ -984,12 +984,25 @@ const STATIC_FILES = {
   '/app.js': 'app.js',
   '/logo.png': 'logo.png',
   '/logo-icon.png': 'logo-icon.png',
-  '/manifest.json': 'manifest.json'
+  '/manifest.json': 'manifest.json',
+  '/icon-192.png': 'icon-192.png',
+  '/icon-512.png': 'icon-512.png',
+  '/icon-apple-180.png': 'icon-apple-180.png'
 };
 Object.entries(STATIC_FILES).forEach(([route, file]) => {
   app.get(route, (req, res) => {
     res.sendFile(path.join(__dirname, file));
   });
+});
+
+// Service worker: precisa ficar na raiz "/" para poder controlar o site inteiro
+// (o escopo de um service worker e limitado a pasta onde o arquivo e servido).
+// "no-store" garante que o navegador sempre busque a versao mais nova do sw.js
+// assim que ela for publicada, em vez de ficar preso numa versao antiga em cache.
+app.get('/sw.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript');
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'sw.js'));
 });
 
 // Tratamento de erros (ex: upload maior que o limite, tipo de arquivo invalido)

@@ -22,6 +22,17 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Cardápio diário**: cozinha, professoras (regente/auxiliar/estagiária) ou direção registram o que foi oferecido em cada refeição (Café da Manhã, Almoço, Café da Tarde, Lanche Final) por data. Todos podem consultar por dia.
 - **Financeiro simples com relatório mensal**: lançamentos de receitas e despesas com saldo calculado automaticamente. Tem um filtro por mês (ex: julho/2026) que mostra os totais só daquele período. Diretora, Gestor e Secretária lançam; qualquer pessoa logada pode visualizar (transparência com as famílias); só Diretora e Gestor podem excluir lançamentos.
 - **Logo da creche** no topo do app e na tela de login — usando a arte original que você enviou (recortada e otimizada para web).
+- **Instalar como aplicativo no celular (PWA)**: o app pode ser adicionado à tela inicial do Android/iPhone e abrir em tela cheia, como um app "de verdade" — sem precisar de loja de aplicativos. Veja a seção "📲 Instalar como aplicativo no celular" abaixo.
+
+## 📲 Instalar como aplicativo no celular
+
+**Android (Chrome):** ao abrir o site, aparece um botão **"📲 Instalar app no celular"** na tela de login (ou **"📲 Instalar"** no topo, depois de logado). É só tocar nele e confirmar. O ícone aparece na tela inicial do celular igual a qualquer outro app.
+
+**iPhone/iPad (Safari):** o iOS não permite esse botão automático — aparece uma faixa azul explicando o passo manual: toque no ícone de **Compartilhar** (o quadrado com a seta pra cima, na barra do Safari) e depois em **"Adicionar à Tela de Início"**.
+
+Depois de instalado, o app abre sem a barra de endereço do navegador, com o ícone e nome "CEI Ângela Amin". Por baixo dos panos ele continua sendo o mesmo site — os dados (mensagens, financeiro, etc.) sempre vêm direto do servidor, nada fica "preso" desatualizado no celular. Só os arquivos que não mudam (visual do app) ficam guardados para abrir mais rápido e funcionar minimamente offline.
+
+⚠️ Sempre que eu enviar uma atualização de código depois desta, o celular das pessoas vai puxar a versão nova sozinho na próxima vez que abrirem o app com internet — não precisa desinstalar/reinstalar.
 
 ## ⚠️ Sobre esta atualização especificamente
 
@@ -92,6 +103,9 @@ Como o projeto foi criado dentro de uma pasta de saída sem subpastas, todos os 
 - `index.html`, `style.css`, `app.js` — o front-end (uma única página).
 - `logo.png` — logotipo completo (ícone + nome), usado na tela de login.
 - `logo-icon.png` — só o ícone circular, usado no topo do app e como ícone do site.
+- `icon-192.png`, `icon-512.png`, `icon-apple-180.png` — ícones em tamanhos exigidos para instalar o app como PWA (Android/iOS).
+- `manifest.json` — arquivo de configuração do PWA (nome, cor, ícones).
+- `sw.js` — service worker: permite instalar o app e guarda em cache os arquivos que não mudam (nunca guarda mensagens, financeiro ou anexos, sempre buscados do servidor).
 - `package.json` — dependências do projeto.
 - `data/` e `uploads/` — criadas automaticamente ao rodar (banco SQLite e arquivos enviados no chat). **Não vá para o Git** — já é comum ignorá-las (veja abaixo).
 

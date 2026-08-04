@@ -123,6 +123,16 @@ button {
   font-size: 13px;
   margin-bottom: 16px;
 }
+.ios-install-hint {
+  background: #eef6fd;
+  border: 1px solid #cfe6f7;
+  color: #1a5f8a;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  text-align: center;
+}
 .tabs { display: flex; gap: 4px; background: #f0f1f3; border-radius: 10px; padding: 4px; margin-bottom: 16px; }
 .tabs button { flex: 1; border: none; background: transparent; padding: 8px; border-radius: 8px; font-size: 13px; color: var(--gray-light); font-weight: 600; }
 .tabs button.active { background: #fff; color: var(--red); box-shadow: 0 1px 3px rgba(0,0,0,.1); }

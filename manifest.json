@@ -1,9 +1,19 @@
 {
   "name": "CEI Ângela Amin",
   "short_name": "CEI Ângela Amin",
+  "description": "Aplicativo da CEI Ângela Amin para pais e equipe: turmas, mensagens, cardápio e financeiro.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#d13b2e",
-  "icons": [{ "src": "/logo-icon.png", "sizes": "400x400", "type": "image/png" }]
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "/logo-icon.png", "sizes": "400x400", "type": "image/png" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
 }

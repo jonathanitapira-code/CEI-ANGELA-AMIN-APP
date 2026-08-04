@@ -934,5 +934,59 @@
     });
   });
 
+  // ------------------------------------------------------------------
+  // PWA: registrar service worker + botao "Instalar app"
+  // ------------------------------------------------------------------
+  function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {
+        // se falhar (ex: navegador antigo), o app continua funcionando normalmente pelo navegador
+      });
+    });
+  }
+
+  function isStandaloneDisplay() {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  }
+
+  function setupInstallPrompt() {
+    const installButtons = Array.from(document.querySelectorAll('.btn-install-app'));
+    if (isStandaloneDisplay() || !installButtons.length) return;
+
+    let deferredPrompt = null;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installButtons.forEach((btn) => btn.classList.remove('hidden'));
+    });
+
+    installButtons.forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
+        installButtons.forEach((b) => b.classList.add('hidden'));
+      });
+    });
+
+    window.addEventListener('appinstalled', () => {
+      installButtons.forEach((btn) => btn.classList.add('hidden'));
+      const hint = document.getElementById('ios-install-hint');
+      if (hint) hint.classList.add('hidden');
+    });
+
+    // iOS Safari nao dispara "beforeinstallprompt" - mostra instrucao manual em vez do botao
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    if (isIOS) {
+      const hint = document.getElementById('ios-install-hint');
+      if (hint) hint.classList.remove('hidden');
+    }
+  }
+
+  registerServiceWorker();
+  setupInstallPrompt();
   boot();
 })();
