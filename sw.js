@@ -16,7 +16,7 @@
 // baixar tudo de novo automaticamente, em vez de continuar usando uma copia
 // antiga guardada no celular.
 // ---------------------------------------------------------------------------
-const CACHE_VERSION = 'cei-angela-amin-v1';
+const CACHE_VERSION = 'cei-angela-amin-v2';
 
 const APP_SHELL = [
   '/',
@@ -83,6 +83,45 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(() => cached);
       return cached || fetchPromise;
+    })
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Notificacoes push (mensagem recebida com o app fechado ou em segundo plano)
+// ---------------------------------------------------------------------------
+self.addEventListener('push', (event) => {
+  let data = { title: 'CEI Ângela Amin', body: 'Voce tem uma nova mensagem.', url: '/' };
+  if (event.data) {
+    try { data = Object.assign(data, event.data.json()); } catch (e) { /* usa o padrao acima */ }
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      data: { url: data.url || '/' },
+      tag: data.url || undefined // mensagens novas da mesma conversa substituem a notificacao anterior, em vez de empilhar
+    })
+  );
+});
+
+// Ao clicar na notificacao: foca uma aba ja aberta do app (levando para a
+// conversa certa) ou abre uma aba nova, se nao tiver nenhuma aberta.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if ('focus' in client) {
+          client.postMessage({ type: 'notification-click', url: targetUrl });
+          return client.focus();
+        }
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(targetUrl);
+      }
     })
   );
 });

@@ -25,6 +25,7 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Instalar como aplicativo no celular (PWA)**: o app pode ser adicionado à tela inicial do Android/iPhone e abrir em tela cheia, como um app "de verdade" — sem precisar de loja de aplicativos. Veja a seção "📲 Instalar como aplicativo no celular" abaixo.
 - **Esqueceu a senha? Redefinir senha**: como o login é por telefone (sem e-mail/SMS cadastrado), não existe um link automático de "recuperar senha" por enquanto. Na tela de login há um botão "Esqueceu sua senha?" explicando isso. A redefinição é feita por alguém da Direção (Diretora, Coordenadora Pedagógica, Secretária) ou pelo Gestor, direto no app, na aba **"Usuários"**: buscar a pessoa pelo nome/telefone, clicar em "Redefinir senha", definir uma senha temporária e avisar essa pessoa diretamente (telefone, WhatsApp, pessoalmente).
 - **Corrigir cadastro errado / excluir usuário**: na mesma aba "Usuários", Direção e Gestor também podem clicar em **"Alterar papel"** (útil quando alguém marcou "Responsável" mas na verdade é da equipe, ou vice-versa) ou em **"Excluir"** (a pessoa sai de todas as turmas e não consegue mais entrar no app; o histórico de mensagens/cardápio/financeiro que ela já registrou continua aparecendo normalmente para os outros, e o número de telefone dela fica livre para um cadastro novo). Ninguém consegue alterar/excluir a própria conta por essa tela.
+- **Notificação de mensagem recebida (push)**: cada pessoa pode clicar em "🔔 Notificações" no topo do app para autorizar avisos, mesmo com o app fechado (funciona pra turma e pra conversa privada). Veja a seção "🔔 Notificações push" abaixo — precisa de uma configuração extra no Render pra funcionar.
 
 ## 📲 Instalar como aplicativo no celular
 
@@ -36,11 +37,31 @@ Depois de instalado, o app abre sem a barra de endereço do navegador, com o íc
 
 ⚠️ Sempre que eu enviar uma atualização de código depois desta, o celular das pessoas vai puxar a versão nova sozinho na próxima vez que abrirem o app com internet — não precisa desinstalar/reinstalar.
 
+## 🔔 Notificações push (aviso de mensagem recebida)
+
+Cada pessoa pode clicar no botão **"🔔 Notificações"** no topo do app para autorizar avisos — funciona tanto para o chat da turma quanto para conversas privadas, e chega mesmo com o app fechado (celular ou computador). É gratuito, não precisa contratar nenhum serviço (usa o protocolo padrão Web Push dos navegadores).
+
+**Duas regrinhas importantes:**
+- No **iPhone**, só funciona se o app estiver instalado na tela de início (iOS 16.4 ou mais novo) — não funciona dentro de uma aba comum do Safari.
+- Quem está com a conversa aberta na tela naquele momento não recebe a notificação (já está vendo a mensagem chegar ao vivo).
+
+**Para ativar no servidor** (só funciona depois disso — sem essa configuração, o botão aparece mas mostra um aviso de que ainda não está disponível): no painel do Render, vá em **Environment → Edit → Add variable** e adicione estas 3 variáveis exatamente como estão aqui (já geradas, prontas para usar):
+
+| Key | Value |
+|---|---|
+| `VAPID_PUBLIC_KEY` | `BNBfhNqxz3MkZ4akUXSSGJ9mseFg_S3EZBNrOHIFeHxOxYuUZBSAUgYPNtta1RwuZHwxRMaVjInhgKKxMsHn87o` |
+| `VAPID_PRIVATE_KEY` | `jbPgMoAtUi0RI4aWBwG0vQ6aRw_hhs6AtOgd5iL89ZA` |
+| `VAPID_SUBJECT` | `mailto:jonathanitapira@gmail.com` |
+
+⚠️ A `VAPID_PRIVATE_KEY` é uma chave secreta (como uma senha) — não compartilhe publicamente. Depois de adicionar as 3, clique em "Save, rebuild, and deploy".
+
 ## ⚠️ Sobre esta atualização especificamente
 
 O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas foram adicionadas (foto de perfil, etc). Por isso o banco de dados passou a usar um arquivo novo (`creche_v2.db` em vez de `creche.db`). **Mesmo com o disco persistente configurado, essa atualização específica vai fazer todo mundo precisar se cadastrar de novo uma última vez** — depois disso, com o disco persistente, os dados ficam salvos normalmente nas próximas atualizações (contanto que eu não mude a estrutura das tabelas de novo).
 
 **Sobre a atualização de "excluir/alterar papel de usuário"**: essa aqui adiciona uma coluna nova (`active`) na tabela de usuários, mas de um jeito seguro que **não apaga nem exige recadastro de ninguém** — o próprio código detecta se a coluna já existe e adiciona sem mexer nos dados existentes.
+
+**Sobre a atualização de "notificações push"**: essa aqui só adiciona uma tabela nova (`push_subscriptions`) para guardar quem autorizou notificação — também **não apaga nem exige recadastro de ninguém**. Sem as 3 variáveis de ambiente novas (veja a seção acima), o app funciona normalmente, só sem o botão de notificação funcionando.
 
 ## Como rodar localmente
 

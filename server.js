@@ -34,10 +34,25 @@ const Database = require('better-sqlite3');
 const { nanoid } = require('nanoid');
 const http = require('http');
 const { Server } = require('socket.io');
+const webpush = require('web-push');
 
 const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'troque-este-segredo-em-producao';
 const STAFF_CODE = process.env.STAFF_CODE || 'creche2026';
+
+// Notificacoes push (aviso de mensagem recebida mesmo com o app fechado):
+// so funciona se essas 3 variaveis estiverem configuradas no Render (veja o
+// README). Sem elas, o app continua funcionando normalmente, so sem push -
+// o chat ao vivo via Socket.IO funciona igual enquanto o app estiver aberto.
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:contato@ceiangelaamin.example';
+const PUSH_ENABLED = !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (PUSH_ENABLED) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} else {
+  console.warn('Notificacoes push desativadas: configure VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY nas variaveis de ambiente para ativar.');
+}
 
 // Se DISK_MOUNT_PATH estiver definido (ex: /var/data, apontando para um disco
 // persistente do Render), o banco de dados e os arquivos enviados no chat sao
@@ -156,6 +171,16 @@ CREATE TABLE IF NOT EXISTS financeiro (
   created_by INTEGER NOT NULL REFERENCES users(id),
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Inscricoes de notificacao push (uma por navegador/aparelho que a pessoa autorizou)
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  endpoint TEXT UNIQUE NOT NULL,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 // Migracao segura para bancos que ja existiam antes da coluna "active" existir:
@@ -191,6 +216,46 @@ app.use(sessionMiddleware);
 
 // Compartilha a sessao com o Socket.IO (socket.io >= 4.6 suporta io.engine.use)
 io.engine.use(sessionMiddleware);
+
+// ---------------------------------------------------------------------------
+// Notificacoes push
+// ---------------------------------------------------------------------------
+
+// Quem esta com o socket conectado numa sala agora (turma_X ou conv_X) - essas
+// pessoas ja estao vendo a mensagem chegar ao vivo na tela, entao nao precisam
+// tambem de uma notificacao push (evita notificar quem ja esta na conversa).
+function getUserIdsInRoom(room) {
+  const ids = new Set();
+  const roomSet = io.sockets.adapter.rooms.get(room);
+  if (!roomSet) return ids;
+  roomSet.forEach((socketId) => {
+    const s = io.sockets.sockets.get(socketId);
+    const uid = s && s.request && s.request.session && s.request.session.userId;
+    if (uid) ids.add(uid);
+  });
+  return ids;
+}
+
+// Envia notificacao push para uma lista de usuarios (em todos os aparelhos
+// que cada um autorizou). Se uma inscricao nao existir mais (a pessoa
+// desinstalou o app, trocou de navegador, etc), o servico de push responde
+// 404/410 e a gente aproveita para limpar essa inscricao velha do banco.
+function sendPushToUsers(userIds, payload) {
+  if (!PUSH_ENABLED || !userIds || !userIds.length) return;
+  const uniqueIds = [...new Set(userIds)];
+  const json = JSON.stringify(payload);
+  uniqueIds.forEach((uid) => {
+    const subs = db.prepare('SELECT * FROM push_subscriptions WHERE user_id = ?').all(uid);
+    subs.forEach((sub) => {
+      const pushSubscription = { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } };
+      webpush.sendNotification(pushSubscription, json).catch((err) => {
+        if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+          db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint);
+        }
+      });
+    });
+  });
+}
 
 const ROLE_LABELS = {
   pai: 'Responsável',
@@ -482,6 +547,34 @@ app.get('/api/avatar/:userId', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Notificacoes push (aviso de mensagem recebida mesmo com o app fechado)
+// ---------------------------------------------------------------------------
+
+// Chave publica usada pelo navegador para se inscrever (nao e segredo).
+app.get('/api/push/vapid-public-key', requireAuth, (req, res) => {
+  res.json({ publicKey: PUSH_ENABLED ? VAPID_PUBLIC_KEY : null });
+});
+
+app.post('/api/push/subscribe', requireAuth, (req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ error: 'Notificacoes push nao estao configuradas neste servidor' });
+  const { endpoint, keys } = req.body || {};
+  if (!endpoint || !keys || !keys.p256dh || !keys.auth) {
+    return res.status(400).json({ error: 'Inscricao de notificacao invalida' });
+  }
+  db.prepare(`
+    INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
+    ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth
+  `).run(req.user.id, endpoint, keys.p256dh, keys.auth);
+  res.json({ ok: true });
+});
+
+app.post('/api/push/unsubscribe', requireAuth, (req, res) => {
+  const { endpoint } = req.body || {};
+  if (endpoint) db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?').run(endpoint, req.user.id);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
 // Turmas
 // ---------------------------------------------------------------------------
 app.post('/api/turmas', requireAuth, requireRole(...TURMA_CREATE_ROLES), (req, res) => {
@@ -724,6 +817,19 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
   };
 
   io.to('turma_' + req.turmaId).emit('new_message', payload);
+
+  // Notifica push quem e da turma, exceto quem enviou e quem ja esta com o
+  // chat dessa turma aberto na tela (essa pessoa ja viu a mensagem chegar).
+  const turmaRow = db.prepare('SELECT name FROM turmas WHERE id = ?').get(req.turmaId);
+  const memberIds = db.prepare('SELECT user_id FROM turma_members WHERE turma_id = ?').all(req.turmaId).map(r => r.user_id);
+  const viewingNow = getUserIdsInRoom('turma_' + req.turmaId);
+  const notifyIds = memberIds.filter(uid => uid !== req.user.id && !viewingNow.has(uid));
+  sendPushToUsers(notifyIds, {
+    title: turmaRow ? turmaRow.name : 'Nova mensagem',
+    body: row.content ? `${row.user_name}: ${row.content}` : `${row.user_name} enviou ${row.att_kind === 'pdf' ? 'um PDF' : 'uma foto'}`,
+    url: `/?openTurma=${req.turmaId}`
+  });
+
   res.json({ message: payload });
 });
 
@@ -900,6 +1006,22 @@ app.post('/api/conversations/:id/messages', requireAuth, requireConversationPart
   };
 
   io.to('conv_' + req.conversationId).emit('new_dm_message', payload);
+
+  // Notifica push a outra pessoa da conversa, exceto se ela ja esta com essa
+  // conversa aberta na tela agora.
+  const convRow = db.prepare('SELECT * FROM conversations WHERE id = ?').get(req.conversationId);
+  if (convRow) {
+    const otherId = convRow.user_a_id === req.user.id ? convRow.user_b_id : convRow.user_a_id;
+    const viewingNow = getUserIdsInRoom('conv_' + req.conversationId);
+    if (!viewingNow.has(otherId)) {
+      sendPushToUsers([otherId], {
+        title: row.sender_name,
+        body: row.content ? row.content : `Enviou ${row.att_kind === 'pdf' ? 'um PDF' : 'uma foto'}`,
+        url: `/?openConversation=${req.conversationId}`
+      });
+    }
+  }
+
   res.json({ message: payload });
 });
 

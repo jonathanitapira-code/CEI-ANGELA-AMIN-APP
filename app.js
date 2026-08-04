@@ -333,14 +333,35 @@
 
     connectSocket();
     setupNav();
+    setupPushNotifications();
     document.getElementById('cardapio-date').value = todayStr();
     showView('turmas');
     await handlePendingInvite();
-    loadTurmas();
+    await loadTurmas();
+    await openDeepLinkFromUrl(location.href);
 
-    // limpa o parametro ?invite= da URL para nao repetir o fluxo em um refresh
+    // limpa o parametro ?invite=/?openTurma=/?openConversation= da URL para
+    // nao repetir o fluxo em um refresh
     if (history.replaceState) {
       history.replaceState({}, '', location.pathname);
+    }
+  }
+
+  // Abre a turma ou conversa certa a partir de um link com ?openTurma=ID ou
+  // ?openConversation=ID - usado ao clicar numa notificacao push.
+  async function openDeepLinkFromUrl(urlStr) {
+    let params;
+    try { params = new URL(urlStr, location.origin).searchParams; } catch (e) { return; }
+    const openTurmaId = params.get('openTurma');
+    const openConversationId = params.get('openConversation');
+    if (openTurmaId) {
+      let turma = state.turmas.find(t => String(t.id) === String(openTurmaId));
+      if (!turma) { await loadTurmas(); turma = state.turmas.find(t => String(t.id) === String(openTurmaId)); }
+      if (turma) openChat(turma);
+    } else if (openConversationId) {
+      await loadConversations();
+      const conv = state.conversations.find(c => String(c.id) === String(openConversationId));
+      if (conv) openConversation(conv);
     }
   }
 
@@ -1168,6 +1189,68 @@
       const hint = document.getElementById('ios-install-hint');
       if (hint) hint.classList.remove('hidden');
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Notificacoes push (aviso de mensagem recebida mesmo com o app fechado)
+  // ------------------------------------------------------------------
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
+
+  async function setupPushNotifications() {
+    const btn = document.getElementById('btn-enable-push');
+    if (!btn) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') return;
+    if (Notification.permission === 'denied') return; // usuario ja negou no navegador, nao insiste
+
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) return; // ja esta inscrito, nao precisa mostrar o botao
+
+      btn.classList.remove('hidden');
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const { publicKey } = await api('/api/push/vapid-public-key');
+          if (!publicKey) {
+            alert('As notificacoes push ainda nao foram configuradas neste servidor. Fale com quem administra o app.');
+            return;
+          }
+          const sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey)
+          });
+          await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+          btn.classList.add('hidden');
+        } catch (err) {
+          if (Notification.permission === 'denied') {
+            alert('As notificacoes foram bloqueadas no navegador. Para ativar, mude a permissao de notificacao desse site nas configuracoes do navegador.');
+          } else {
+            alert('Nao foi possivel ativar as notificacoes: ' + err.message);
+          }
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    } catch (err) { /* service worker ainda nao pronto - o botao so nao aparece */ }
+  }
+
+  // Quando a pessoa clica numa notificacao push com o app ja aberto em alguma
+  // aba, o service worker manda essa mensagem pra gente abrir a conversa certa
+  // sem precisar recarregar a pagina inteira.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'notification-click' && event.data.url && state.user) {
+        openDeepLinkFromUrl(event.data.url);
+      }
+    });
   }
 
   registerServiceWorker();
