@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>CEI Angela Amin</title>
+<link rel="icon" href="/logo.svg" />
+<link rel="manifest" href="/manifest.json" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<!-- ===================== TELA DE LOGIN / CADASTRO ===================== -->
+<div id="auth-screen">
+  <div class="auth-card">
+    <div class="logo-wrap"><img src="/logo.svg" alt="Logo" /></div>
+    <h1>CEI Angela Amin</h1>
+    <div class="subtitle">CENTRO DE EDUCACAO INFANTIL</div>
+
+    <div id="invite-banner" class="invite-banner hidden"></div>
+
+    <div class="tabs">
+      <button id="tab-login" class="active">Entrar</button>
+      <button id="tab-register">Cadastrar</button>
+    </div>
+
+    <!-- LOGIN -->
+    <form id="form-login">
+      <div class="field">
+        <label>E-mail</label>
+        <input type="email" id="login-email" required autocomplete="email" />
+      </div>
+      <div class="field">
+        <label>Senha</label>
+        <input type="password" id="login-password" required autocomplete="current-password" />
+      </div>
+      <div class="error-msg" id="login-error"></div>
+      <button type="submit" class="btn" style="width:100%">Entrar</button>
+    </form>
+
+    <!-- REGISTER -->
+    <form id="form-register" class="hidden">
+      <div class="field">
+        <label>Eu sou</label>
+        <select id="reg-role">
+          <option value="pai">Responsavel (pai/mae)</option>
+          <option value="professor">Professor(a)</option>
+          <option value="cozinha">Cozinha</option>
+          <option value="admin">Direcao</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Nome completo</label>
+        <input type="text" id="reg-name" required />
+      </div>
+      <div class="field">
+        <label>E-mail</label>
+        <input type="email" id="reg-email" required autocomplete="email" />
+      </div>
+      <div class="field">
+        <label>Senha</label>
+        <input type="password" id="reg-password" required minlength="6" autocomplete="new-password" />
+      </div>
+      <div class="field" id="reg-staffcode-field">
+        <label>Codigo da equipe (fornecido pela direcao)</label>
+        <input type="text" id="reg-staffcode" />
+      </div>
+      <div class="field hidden" id="reg-childname-field">
+        <label>Nome da crianca</label>
+        <input type="text" id="reg-childname" />
+      </div>
+      <div class="error-msg" id="register-error"></div>
+      <button type="submit" class="btn" style="width:100%">Criar conta</button>
+    </form>
+
+    <div class="hint" id="join-hint"></div>
+  </div>
+</div>
+
+<!-- ===================== APP PRINCIPAL ===================== -->
+<div id="app-screen" class="hidden">
+  <div class="topbar">
+    <img class="logo" src="/logo.svg" alt="Logo" />
+    <div class="brand"><b>CEI Angela Amin</b><span>CENTRO DE EDUCACAO INFANTIL</span></div>
+    <div class="spacer"></div>
+    <div class="user-chip">
+      <span id="user-name"></span>
+      <span id="user-role-badge" class="role-badge"></span>
+    </div>
+    <button class="btn ghost" id="btn-logout">Sair</button>
+  </div>
+
+  <div class="nav-tabs">
+    <button data-view="turmas" class="active">Turmas</button>
+    <button data-view="cardapio">Cardapio</button>
+    <button data-view="financeiro">Financeiro</button>
+  </div>
+
+  <!-- ---------- TURMAS ---------- -->
+  <div class="view" id="view-turmas">
+    <div class="view-header">
+      <h2>Minhas turmas</h2>
+      <button class="btn hidden" id="btn-new-turma">+ Criar turma</button>
+    </div>
+    <div class="turma-grid" id="turma-grid"></div>
+  </div>
+
+  <!-- ---------- CARDAPIO ---------- -->
+  <div class="view hidden" id="view-cardapio">
+    <div class="view-header"><h2>Cardapio do dia</h2></div>
+    <div class="date-picker-row">
+      <input type="date" id="cardapio-date" />
+      <button class="btn hidden" id="btn-new-meal">+ Adicionar refeicao</button>
+    </div>
+    <div id="cardapio-list"></div>
+  </div>
+
+  <!-- ---------- FINANCEIRO ---------- -->
+  <div class="view hidden" id="view-financeiro">
+    <div class="view-header">
+      <h2>Financeiro - prestacao de contas</h2>
+      <button class="btn hidden" id="btn-new-lancamento">+ Lancamento</button>
+    </div>
+    <div class="fin-totals">
+      <div class="card receitas"><div class="label">Receitas</div><div class="value" id="fin-receitas">R$ 0,00</div></div>
+      <div class="card despesas"><div class="label">Despesas</div><div class="value" id="fin-despesas">R$ 0,00</div></div>
+      <div class="card saldo"><div class="label">Saldo</div><div class="value" id="fin-saldo">R$ 0,00</div></div>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="fin-table">
+        <thead><tr><th>Data</th><th>Tipo</th><th>Descricao</th><th>Valor</th><th>Por</th><th></th></tr></thead>
+        <tbody id="fin-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ---------- CHAT (tela cheia) ---------- -->
+  <div class="hidden" id="view-chat">
+    <div class="chat-wrap">
+      <div class="chat-header">
+        <button class="btn ghost" id="btn-back-turmas">&larr;</button>
+        <h3 id="chat-turma-name"></h3>
+        <button class="btn secondary" id="btn-invite">Convite</button>
+        <button class="btn secondary" id="btn-members">Quem e quem</button>
+      </div>
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="chat-input-bar">
+        <button class="icon-btn" id="btn-attach" title="Anexar imagem ou PDF">📎</button>
+        <input type="file" id="file-input" accept="image/*,application/pdf" class="hidden" />
+        <textarea id="chat-text" rows="1" placeholder="Escreva uma mensagem..."></textarea>
+        <button class="icon-btn" id="btn-send" title="Enviar">➤</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== MODAIS ===================== -->
+<div id="modal-root"></div>
+<div id="viewer-root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
