@@ -39,8 +39,14 @@ const PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'troque-este-segredo-em-producao';
 const STAFF_CODE = process.env.STAFF_CODE || 'creche2026';
 
-const DATA_DIR = path.join(__dirname, 'data');
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
+// Se DISK_MOUNT_PATH estiver definido (ex: /var/data, apontando para um disco
+// persistente do Render), o banco de dados e os arquivos enviados no chat sao
+// guardados la dentro e sobrevivem a reinicios/novos deploys. Sem essa variavel
+// (ex: rodando no plano gratuito ou no seu computador), tudo fica na propria
+// pasta do projeto, como antes.
+const DISK_MOUNT_PATH = process.env.DISK_MOUNT_PATH || __dirname;
+const DATA_DIR = path.join(DISK_MOUNT_PATH, 'data');
+const UPLOAD_DIR = path.join(DISK_MOUNT_PATH, 'uploads');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -150,6 +156,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+app.set('trust proxy', 1); // necessario para cookies funcionarem certo atras do proxy HTTPS do Render
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -157,7 +164,10 @@ const sessionMiddleware = session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 1000 * 60 * 60 * 24 * 30 } // 30 dias
+  cookie: {
+    maxAge: 1000 * 60 * 60 * 24 * 30, // 30 dias
+    secure: 'auto' // usa cookie seguro automaticamente quando servido via HTTPS (Render), sem quebrar o localhost
+  }
 });
 app.use(sessionMiddleware);
 

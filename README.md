@@ -57,7 +57,22 @@ Hoje o app roda como um servidor único (Node + SQLite). Para pais e professores
 2. **Um VPS simples** (ex.: uma máquina pequena na DigitalOcean/Hetzner) rodando `npm start` com um gerenciador de processos como `pm2`, atrás de um proxy HTTPS (Nginx + Let's Encrypt).
 3. Para testes internos na mesma rede Wi-Fi da creche, dá pra rodar localmente e acessar pelo IP da máquina (ex. `http://192.168.0.10:3000`) — mas isso não funciona fora da rede.
 
-Ao publicar com HTTPS, adicione em `server.js` (procure pelo trecho `const sessionMiddleware = session({...})`) a opção `cookie: { secure: true }` e, logo acima de `app.use(sessionMiddleware)`, a linha `app.set('trust proxy', 1)` — isso é necessário para os cookies de login funcionarem corretamente atrás de HTTPS.
+O `server.js` já vem configurado para funcionar certo atrás de HTTPS (Render, por exemplo) sem precisar editar nada.
+
+## Deixando os dados salvos de verdade (plano pago + disco persistente)
+
+No plano gratuito do Render, o banco de dados e as fotos do chat somem a cada novo deploy ou reinício. Para isso não acontecer mais, o caminho mais barato é:
+
+1. No Render, vá no seu serviço → **Settings** → **Instance Type** → mude de **Free** para **Starter** (US$7/mês). Vai pedir para cadastrar um cartão em **Billing**, se ainda não tiver.
+2. Ainda no serviço, vá em **Disk** (no menu lateral) → **Add Disk**.
+   - Name: `creche-data`
+   - Mount Path: `/var/data`
+   - Size: 1 GB já é suficiente para começar (US$0,25/mês; dá para aumentar depois se precisar de mais espaço para fotos).
+3. Em **Environment**, adicione a variável `DISK_MOUNT_PATH` com o valor `/var/data` (tem que ser exatamente igual ao Mount Path do passo 2).
+4. Suba o `server.js` atualizado (a versão mais recente já sabe usar essa variável para guardar os dados dentro do disco).
+5. Espere o deploy terminar. A partir daí, cadastros, turmas, conversas, cardápio e financeiro **não são mais apagados** em deploys/reinícios futuros.
+
+Custo total desse caminho: **US$7/mês (Starter) + US$0,25/mês (1 GB de disco) ≈ US$7,25/mês**, cobrado proporcional ao tempo de uso pelo Render.
 
 ## Estrutura dos arquivos
 
