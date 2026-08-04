@@ -5,12 +5,20 @@
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-  const STAFF_ROLES = ['professor', 'cozinha', 'admin'];
+  const STAFF_ROLES = ['estagiaria', 'professora_regente', 'professora_auxiliar', 'cozinha', 'diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
+  const TURMA_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'diretora', 'coordenadora_pedagogica', 'gestor'];
+  const CARDAPIO_ROLES = ['cozinha', 'professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'gestor'];
+  const CARDAPIO_ADMIN_ROLES = ['diretora', 'coordenadora_pedagogica', 'gestor'];
+  const FIN_MANAGE_ROLES = ['diretora', 'gestor', 'secretaria'];
+  const FIN_DELETE_ROLES = ['diretora', 'gestor'];
+
+  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro'];
 
   const state = {
     user: null,
     turmas: [],
-    currentTurma: null,
+    conversations: [],
+    chat: null, // { type: 'turma'|'conversation', id, name, roleBadgeHtml }
     socket: null,
     inviteCode: null,
     inviteTurmaName: null
@@ -238,9 +246,9 @@
     const badge = document.getElementById('user-role-badge');
     badge.textContent = state.user.roleLabel;
     badge.className = 'role-badge role-' + state.user.role;
-    document.getElementById('btn-new-turma').classList.toggle('hidden', !['professor', 'admin'].includes(state.user.role));
-    document.getElementById('btn-new-meal').classList.toggle('hidden', !STAFF_ROLES.includes(state.user.role));
-    document.getElementById('btn-new-lancamento').classList.toggle('hidden', !['professor', 'admin'].includes(state.user.role));
+    document.getElementById('btn-new-turma').classList.toggle('hidden', !TURMA_CREATE_ROLES.includes(state.user.role));
+    document.getElementById('btn-new-meal').classList.toggle('hidden', !CARDAPIO_ROLES.includes(state.user.role));
+    document.getElementById('btn-new-lancamento').classList.toggle('hidden', !FIN_MANAGE_ROLES.includes(state.user.role));
 
     connectSocket();
     setupNav();
@@ -311,9 +319,25 @@
   function connectSocket() {
     state.socket = io();
     state.socket.on('new_message', (msg) => {
-      if (state.currentTurma && msg.turmaId === state.currentTurma.id) {
+      if (state.chat && state.chat.type === 'turma' && msg.turmaId === state.chat.id) {
         appendMessage(msg);
         scrollChatToBottom();
+      }
+    });
+    state.socket.on('message_deleted', (info) => {
+      if (state.chat && state.chat.type === 'turma' && info.turmaId === state.chat.id) {
+        markMessageDeleted(info.id, info.deletedByName);
+      }
+    });
+    state.socket.on('new_dm_message', (msg) => {
+      if (state.chat && state.chat.type === 'conversation' && msg.conversationId === state.chat.id) {
+        appendMessage(msg);
+        scrollChatToBottom();
+      }
+    });
+    state.socket.on('dm_message_deleted', (info) => {
+      if (state.chat && state.chat.type === 'conversation' && info.conversationId === state.chat.id) {
+        markMessageDeleted(info.id, null);
       }
     });
   }
@@ -327,20 +351,22 @@
   function showView(name) {
     leaveChatSocketIfNeeded();
     document.querySelectorAll('.nav-tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
-    ['turmas', 'cardapio', 'financeiro'].forEach(v => {
+    NAV_VIEWS.forEach(v => {
       document.getElementById('view-' + v).classList.toggle('hidden', v !== name);
     });
     document.getElementById('view-chat').classList.add('hidden');
     document.querySelector('.nav-tabs').classList.remove('hidden');
     if (name === 'turmas') loadTurmas();
+    if (name === 'mensagens') loadConversations();
     if (name === 'cardapio') loadCardapio();
     if (name === 'financeiro') loadFinanceiro();
   }
 
   function leaveChatSocketIfNeeded() {
-    if (state.currentTurma) {
-      state.socket.emit('leave_turma', state.currentTurma.id);
-      state.currentTurma = null;
+    if (state.chat) {
+      if (state.chat.type === 'turma') state.socket.emit('leave_turma', state.chat.id);
+      else state.socket.emit('leave_conversation', state.chat.id);
+      state.chat = null;
     }
   }
 
@@ -353,7 +379,7 @@
     const grid = document.getElementById('turma-grid');
     grid.innerHTML = '';
     if (!data.turmas.length) {
-      grid.innerHTML = `<div class="empty-state">Nenhuma turma ainda.${['professor','admin'].includes(state.user.role) ? ' Clique em "Criar turma" para comecar.' : ' Peca ao professor(a) o link de convite da turma.'}</div>`;
+      grid.innerHTML = `<div class="empty-state">Nenhuma turma ainda.${TURMA_CREATE_ROLES.includes(state.user.role) ? ' Clique em "Criar turma" para comecar.' : ' Peca a professora o link de convite da turma.'}</div>`;
       return;
     }
     data.turmas.forEach(t => {
@@ -411,14 +437,16 @@
   }
 
   // ------------------------------------------------------------------
-  // Chat
+  // Chat (turma em grupo)
   // ------------------------------------------------------------------
   async function openChat(turma) {
-    state.currentTurma = turma;
+    state.chat = { type: 'turma', id: turma.id, name: turma.name, inviteCode: turma.invite_code };
     document.getElementById('view-chat').classList.remove('hidden');
-    ['turmas', 'cardapio', 'financeiro'].forEach(v => document.getElementById('view-' + v).classList.add('hidden'));
+    NAV_VIEWS.forEach(v => document.getElementById('view-' + v).classList.add('hidden'));
     document.querySelector('.nav-tabs').classList.add('hidden');
-    document.getElementById('chat-turma-name').textContent = turma.name;
+    document.getElementById('chat-turma-name').innerHTML = escapeHtml(turma.name);
+    document.getElementById('btn-invite').classList.remove('hidden');
+    document.getElementById('btn-members').classList.remove('hidden');
     document.getElementById('chat-messages').innerHTML = '';
 
     state.socket.emit('join_turma', turma.id);
@@ -427,15 +455,17 @@
     scrollChatToBottom();
   }
 
-  document.getElementById('btn-back-turmas').addEventListener('click', () => showView('turmas'));
+  document.getElementById('btn-back-turmas').addEventListener('click', () => {
+    showView(state.chat && state.chat.type === 'conversation' ? 'mensagens' : 'turmas');
+  });
 
   document.getElementById('btn-invite').addEventListener('click', () => {
-    if (state.currentTurma) showInviteModal(state.currentTurma);
+    if (state.chat && state.chat.type === 'turma') showInviteModal({ name: state.chat.name, invite_code: state.chat.inviteCode });
   });
 
   document.getElementById('btn-members').addEventListener('click', async () => {
-    if (!state.currentTurma) return;
-    const data = await api(`/api/turmas/${state.currentTurma.id}/members`);
+    if (!state.chat || state.chat.type !== 'turma') return;
+    const data = await api(`/api/turmas/${state.chat.id}/members`);
     const rows = data.members.map(m => `
       <div class="member-row">
         ${roleBadge(m.role, m.roleLabel)}
@@ -454,29 +484,60 @@
 
   function appendMessage(msg) {
     const mine = msg.user.id === state.user.id;
-    const wrap = el(`<div class="msg ${mine ? 'mine' : ''}"></div>`);
+    const wrap = el(`<div class="msg ${mine ? 'mine' : ''}" data-msg-id="${msg.id}"></div>`);
     const meta = el(`<div class="meta"></div>`);
     meta.innerHTML = `<b>${escapeHtml(msg.user.name)}</b> ${roleBadge(msg.user.role, msg.user.roleLabel)} <span>${fmtDateTime(msg.createdAt)}</span>`;
-    const bubble = el(`<div class="bubble"></div>`);
-    if (msg.content) {
-      const p = document.createElement('div');
-      p.textContent = msg.content;
-      bubble.appendChild(p);
+    if (msg.canDelete) {
+      const delBtn = el(`<button class="msg-del" title="Apagar mensagem">🗑</button>`);
+      delBtn.addEventListener('click', () => deleteMessage(msg.id));
+      meta.appendChild(delBtn);
     }
-    if (msg.attachment) {
-      if (msg.attachment.kind === 'imagem') {
-        const img = el(`<img class="chat-thumb" src="/api/attachments/${msg.attachment.id}" oncontextmenu="return false" draggable="false" />`);
-        img.addEventListener('click', () => openImageViewer(`/api/attachments/${msg.attachment.id}`));
-        bubble.appendChild(img);
-      } else {
-        const chip = el(`<div class="pdf-chip">📄 ${escapeHtml(msg.attachment.name || 'Documento PDF')}</div>`);
-        chip.addEventListener('click', () => openPdfViewer(`/api/attachments/${msg.attachment.id}`));
-        bubble.appendChild(chip);
+    const bubble = el(`<div class="bubble"></div>`);
+    if (msg.deleted) {
+      bubble.classList.add('deleted');
+      bubble.textContent = msg.deletedByName ? `Mensagem removida por ${msg.deletedByName}` : 'Mensagem removida';
+    } else {
+      if (msg.content) {
+        const p = document.createElement('div');
+        p.textContent = msg.content;
+        bubble.appendChild(p);
+      }
+      if (msg.attachment) {
+        if (msg.attachment.kind === 'imagem') {
+          const img = el(`<img class="chat-thumb" src="/api/attachments/${msg.attachment.id}" oncontextmenu="return false" draggable="false" />`);
+          img.addEventListener('click', () => openImageViewer(`/api/attachments/${msg.attachment.id}`));
+          bubble.appendChild(img);
+        } else {
+          const chip = el(`<div class="pdf-chip">📄 ${escapeHtml(msg.attachment.name || 'Documento PDF')}</div>`);
+          chip.addEventListener('click', () => openPdfViewer(`/api/attachments/${msg.attachment.id}`));
+          bubble.appendChild(chip);
+        }
       }
     }
     wrap.appendChild(meta);
     wrap.appendChild(bubble);
     document.getElementById('chat-messages').appendChild(wrap);
+  }
+
+  function markMessageDeleted(id, deletedByName) {
+    const wrap = document.querySelector(`#chat-messages [data-msg-id="${id}"]`);
+    if (!wrap) return;
+    const bubble = wrap.querySelector('.bubble');
+    bubble.classList.add('deleted');
+    bubble.textContent = deletedByName ? `Mensagem removida por ${deletedByName}` : 'Mensagem removida';
+    const delBtn = wrap.querySelector('.msg-del');
+    if (delBtn) delBtn.remove();
+  }
+
+  async function deleteMessage(id) {
+    if (!confirm('Apagar esta mensagem para todos?')) return;
+    try {
+      const endpoint = state.chat.type === 'turma' ? `/api/messages/${id}` : `/api/dm-messages/${id}`;
+      await api(endpoint, { method: 'DELETE' });
+      markMessageDeleted(id, state.user.name);
+    } catch (err) {
+      alert('Erro ao apagar: ' + err.message);
+    }
   }
 
   function scrollChatToBottom() {
@@ -503,18 +564,19 @@
   document.getElementById('btn-send').addEventListener('click', sendMessage);
 
   async function sendMessage() {
-    if (!state.currentTurma) return;
+    if (!state.chat) return;
     const text = chatText.value.trim();
     if (!text && !pendingFile) return;
     let attachmentId = null;
+    const base = state.chat.type === 'turma' ? `/api/turmas/${state.chat.id}` : `/api/conversations/${state.chat.id}`;
     try {
       if (pendingFile) {
         const fd = new FormData();
         fd.append('file', pendingFile);
-        const up = await api(`/api/turmas/${state.currentTurma.id}/attachments`, { method: 'POST', body: fd });
+        const up = await api(`${base}/attachments`, { method: 'POST', body: fd });
         attachmentId = up.attachmentId;
       }
-      await api(`/api/turmas/${state.currentTurma.id}/messages`, {
+      await api(`${base}/messages`, {
         method: 'POST',
         body: { content: text, attachmentId }
       });
@@ -528,9 +590,84 @@
   }
 
   // ------------------------------------------------------------------
+  // Mensagens privadas (conversas 1:1)
+  // ------------------------------------------------------------------
+  async function loadConversations() {
+    const data = await api('/api/conversations');
+    state.conversations = data.conversations;
+    const grid = document.getElementById('conversa-grid');
+    grid.innerHTML = '';
+    if (!data.conversations.length) {
+      grid.innerHTML = '<div class="empty-state">Nenhuma conversa ainda. Clique em "Nova conversa" para falar com a equipe.</div>';
+      return;
+    }
+    data.conversations.forEach(c => {
+      const card = el(`<div class="turma-card">
+        <h3>${escapeHtml(c.other.name)} ${roleBadge(c.other.role, c.other.roleLabel)}</h3>
+        <p>${c.lastMessagePreview ? escapeHtml(c.lastMessagePreview) : 'Nenhuma mensagem ainda'}</p>
+      </div>`);
+      card.addEventListener('click', () => openConversation(c));
+      grid.appendChild(card);
+    });
+  }
+
+  document.getElementById('btn-new-conversa').addEventListener('click', async () => {
+    let contacts = [];
+    try {
+      const data = await api('/api/conversations/contacts');
+      contacts = data.contacts;
+    } catch (err) {
+      alert('Erro ao carregar contatos: ' + err.message);
+      return;
+    }
+    const rows = contacts.map(c => `
+      <div class="member-row contact-row" data-user-id="${c.id}" style="cursor:pointer">
+        ${roleBadge(c.role, c.roleLabel)}
+        <div><div class="name">${escapeHtml(c.name)}</div></div>
+      </div>`).join('');
+    const modal = openModal(`
+      <h3>Nova conversa</h3>
+      <p style="font-size:13px;color:#666">Responsaveis so podem falar com a equipe (nunca com outros responsaveis).</p>
+      <div>${rows || '<p>Nenhum contato disponivel no momento.</p>'}</div>
+      <div class="modal-actions"><button class="btn secondary" id="cancel-conversa">Fechar</button></div>
+    `);
+    modal.querySelectorAll('.contact-row').forEach(row => {
+      row.addEventListener('click', async () => {
+        const userId = Number(row.dataset.userId);
+        try {
+          const data = await api('/api/conversations', { method: 'POST', body: { userId } });
+          closeModal();
+          await loadConversations();
+          openConversation(data.conversation);
+        } catch (err) {
+          alert('Erro ao iniciar conversa: ' + err.message);
+        }
+      });
+    });
+    document.getElementById('cancel-conversa').addEventListener('click', closeModal);
+  });
+
+  async function openConversation(conv) {
+    state.chat = { type: 'conversation', id: conv.id, name: conv.other.name };
+    document.getElementById('view-chat').classList.remove('hidden');
+    NAV_VIEWS.forEach(v => document.getElementById('view-' + v).classList.add('hidden'));
+    document.querySelector('.nav-tabs').classList.add('hidden');
+    document.getElementById('chat-turma-name').innerHTML =
+      `${escapeHtml(conv.other.name)} ${roleBadge(conv.other.role, conv.other.roleLabel)}`;
+    document.getElementById('btn-invite').classList.add('hidden');
+    document.getElementById('btn-members').classList.add('hidden');
+    document.getElementById('chat-messages').innerHTML = '';
+
+    state.socket.emit('join_conversation', conv.id);
+    const data = await api(`/api/conversations/${conv.id}/messages`);
+    data.messages.forEach(appendMessage);
+    scrollChatToBottom();
+  }
+
+  // ------------------------------------------------------------------
   // Cardapio
   // ------------------------------------------------------------------
-  const MEAL_TYPES = ['Cafe da manha', 'Lanche da manha', 'Almoco', 'Lanche da tarde', 'Jantar'];
+  const MEAL_TYPES = ['Café da Manhã', 'Almoço', 'Café da Tarde', 'Lanche Final'];
 
   document.getElementById('cardapio-date').addEventListener('change', loadCardapio);
 
@@ -544,7 +681,7 @@
       return;
     }
     data.cardapio.forEach(item => {
-      const canDelete = STAFF_ROLES.includes(state.user.role);
+      const canDelete = item.created_by === state.user.id || CARDAPIO_ADMIN_ROLES.includes(state.user.role);
       const card = el(`<div class="meal-card">
         <div class="meal-type">${escapeHtml(item.meal_type)}</div>
         <div class="meal-desc">${escapeHtml(item.description)}</div>
@@ -614,7 +751,7 @@
         <td>${escapeHtml(item.description)}</td>
         <td class="amount-${item.type}">${fmtBRL(item.amount)}</td>
         <td>${escapeHtml(item.author_name)}</td>
-        <td>${state.user.role === 'admin' ? '<button class="btn ghost" style="padding:2px 8px;font-size:11px" data-del="' + item.id + '">x</button>' : ''}</td>
+        <td>${FIN_DELETE_ROLES.includes(state.user.role) ? '<button class="btn ghost" style="padding:2px 8px;font-size:11px" data-del="' + item.id + '">x</button>' : ''}</td>
       </tr>`);
       const delBtn = tr.querySelector('[data-del]');
       if (delBtn) delBtn.addEventListener('click', async () => {

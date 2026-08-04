@@ -1,9 +1,9 @@
 {
-  "name": "CEI Angela Amin",
-  "short_name": "CEI Angela Amin",
+  "name": "CEI Ângela Amin",
+  "short_name": "CEI Ângela Amin",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#d13b2e",
-  "icons": [{ "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml" }]
+  "icons": [{ "src": "/logo-icon.png", "sizes": "400x400", "type": "image/png" }]
 }

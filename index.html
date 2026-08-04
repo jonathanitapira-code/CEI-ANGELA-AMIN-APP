@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>CEI Angela Amin</title>
-<link rel="icon" href="/logo.svg" />
+<title>CEI Ângela Amin</title>
+<link rel="icon" href="/logo-icon.png" />
 <link rel="manifest" href="/manifest.json" />
 <link rel="stylesheet" href="/style.css" />
 </head>
@@ -13,9 +13,7 @@
 <!-- ===================== TELA DE LOGIN / CADASTRO ===================== -->
 <div id="auth-screen">
   <div class="auth-card">
-    <div class="logo-wrap"><img src="/logo.svg" alt="Logo" /></div>
-    <h1>CEI Angela Amin</h1>
-    <div class="subtitle">CENTRO DE EDUCACAO INFANTIL</div>
+    <div class="logo-wrap"><img src="/logo.png" alt="CEI Ângela Amin - Centro de Educação Infantil" /></div>
 
     <div id="invite-banner" class="invite-banner hidden"></div>
 
@@ -43,10 +41,23 @@
       <div class="field">
         <label>Eu sou</label>
         <select id="reg-role">
-          <option value="pai">Responsavel (pai/mae)</option>
-          <option value="professor">Professor(a)</option>
-          <option value="cozinha">Cozinha</option>
-          <option value="admin">Direcao</option>
+          <optgroup label="Família">
+            <option value="pai">Responsável (pai/mãe)</option>
+          </optgroup>
+          <optgroup label="Sala">
+            <option value="professora_regente">Professora Regente</option>
+            <option value="professora_auxiliar">Professora Auxiliar</option>
+            <option value="estagiaria">Estagiária</option>
+          </optgroup>
+          <optgroup label="Cozinha">
+            <option value="cozinha">Cozinha</option>
+          </optgroup>
+          <optgroup label="Direção">
+            <option value="diretora">Diretora</option>
+            <option value="coordenadora_pedagogica">Coordenadora Pedagógica</option>
+            <option value="secretaria">Secretária</option>
+            <option value="gestor">Gestor</option>
+          </optgroup>
         </select>
       </div>
       <div class="field">
@@ -80,8 +91,8 @@
 <!-- ===================== APP PRINCIPAL ===================== -->
 <div id="app-screen" class="hidden">
   <div class="topbar">
-    <img class="logo" src="/logo.svg" alt="Logo" />
-    <div class="brand"><b>CEI Angela Amin</b><span>CENTRO DE EDUCACAO INFANTIL</span></div>
+    <img class="logo" src="/logo-icon.png" alt="Logo" />
+    <div class="brand"><b>CEI Ângela Amin</b><span>CENTRO DE EDUCAÇÃO INFANTIL</span></div>
     <div class="spacer"></div>
     <div class="user-chip">
       <span id="user-name"></span>
@@ -92,6 +103,7 @@
 
   <div class="nav-tabs">
     <button data-view="turmas" class="active">Turmas</button>
+    <button data-view="mensagens">Mensagens</button>
     <button data-view="cardapio">Cardapio</button>
     <button data-view="financeiro">Financeiro</button>
   </div>
@@ -103,6 +115,15 @@
       <button class="btn hidden" id="btn-new-turma">+ Criar turma</button>
     </div>
     <div class="turma-grid" id="turma-grid"></div>
+  </div>
+
+  <!-- ---------- MENSAGENS PRIVADAS ---------- -->
+  <div class="view hidden" id="view-mensagens">
+    <div class="view-header">
+      <h2>Mensagens</h2>
+      <button class="btn" id="btn-new-conversa">+ Nova conversa</button>
+    </div>
+    <div class="turma-grid" id="conversa-grid"></div>
   </div>
 
   <!-- ---------- CARDAPIO ---------- -->

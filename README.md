@@ -4,16 +4,18 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 
 ## Funcionalidades
 
-- **Login com papéis**: Professor(a), Responsável (pai/mãe), Cozinha e Direção. Contas de equipe exigem um "código da equipe" para evitar cadastros indevidos.
-- **Turmas com link de convite**: o(a) professor(a) cria a turma e recebe um link (`/?invite=CODIGO`). Quem entra pelo link se cadastra/loga como responsável e informa o nome da criança.
+- **Login com 9 papéis**: Responsável (pai/mãe), Estagiária, Professora Regente, Professora Auxiliar, Cozinha, Diretora, Coordenadora Pedagógica, Secretária e Gestor. Contas de equipe (todas menos Responsável) exigem um "código da equipe" para evitar cadastros indevidos.
+- **Turmas com link de convite**: professoras regentes/auxiliares e a direção criam a turma e recebem um link (`/?invite=CODIGO`). Quem entra pelo link se cadastra/loga como responsável e informa o nome da criança.
 - **Identificação de quem é quem**: dentro de cada turma há uma lista "Quem é quem" mostrando cada participante, seu papel (badge colorido) e, no caso dos responsáveis, o nome da criança.
 - **Chat em tempo real por turma** (Socket.IO): mensagens de texto, com nome, papel e horário de quem enviou.
 - **Fotos e PDFs no chat, sem download fácil**: os arquivos são servidos apenas para membros da turma, sempre "inline" (nunca como anexo/download). Imagens abrem em um visualizador dentro do app; PDFs são renderizados página a página em `<canvas>` via PDF.js, sem usar o leitor nativo do navegador (que teria botão de salvar). O menu de clique-direito é bloqueado nas imagens/PDFs.
 
   ⚠️ **Importante**: isso reduz bastante a facilidade de salvar os arquivos, mas nenhum app web consegue impedir 100% um print/captura de tela. Trate como uma barreira razoável, não como criptografia militar.
-- **Cardápio diário**: cozinha, professores ou direção registram o que foi oferecido em cada refeição (café da manhã, lanche, almoço, jantar) por data. Todos podem consultar por dia.
-- **Financeiro simples**: lançamentos de receitas e despesas com saldo calculado automaticamente. Professores e direção lançam; qualquer pessoa logada pode visualizar (transparência com as famílias); só a Direção pode excluir lançamentos.
-- **Logo da creche** no topo do app e na tela de login (recriação em SVG das cores/estilo do logo enviado — veja nota abaixo).
+- **Mensagens privadas**: responsáveis podem abrir uma conversa 1:1 com as professoras/estagiária da turma do filho e com qualquer pessoa da direção. **Nunca é permitida conversa privada entre dois responsáveis.** A equipe também pode conversar livremente entre si. Suporta foto/PDF igual ao chat da turma (visualização dentro do app, sem download).
+- **Apagar mensagens na turma**: qualquer pessoa pode apagar a própria mensagem; a professora regente e qualquer pessoa da direção também podem apagar mensagens enviadas por outras pessoas no chat da turma (fica registrado "Mensagem removida por Fulana"). Nas conversas privadas, só quem enviou pode apagar a própria mensagem.
+- **Cardápio diário**: cozinha, professoras (regente/auxiliar/estagiária) ou direção registram o que foi oferecido em cada refeição (Café da Manhã, Almoço, Café da Tarde, Lanche Final) por data. Todos podem consultar por dia.
+- **Financeiro simples**: lançamentos de receitas e despesas com saldo calculado automaticamente. Diretora, Gestor e Secretária lançam; qualquer pessoa logada pode visualizar (transparência com as famílias); só Diretora e Gestor podem excluir lançamentos.
+- **Logo da creche** no topo do app e na tela de login — usando a arte original que você enviou (recortada e otimizada para web).
 
 ## Como rodar localmente
 
@@ -26,7 +28,7 @@ npm start
 
 Acesse **http://localhost:3000**.
 
-Na primeira vez, crie uma conta de "Direção" ou "Professor(a)" usando o código da equipe padrão:
+Na primeira vez, crie uma conta de equipe (ex.: "Diretora") usando o código da equipe padrão:
 
 ```
 creche2026
@@ -40,7 +42,7 @@ creche2026
 |------------------|---------------------------------------------------|----------------------------------|
 | `PORT`           | Porta do servidor                                  | `3000`                           |
 | `SESSION_SECRET` | Chave usada para assinar o cookie de sessão        | valor de exemplo — **troque!**   |
-| `STAFF_CODE`     | Código que professores/cozinha/direção usam para se cadastrar | `creche2026` — **troque!** |
+| `STAFF_CODE`     | Código que toda a equipe (não-responsáveis) usa para se cadastrar | `creche2026` — **troque!** |
 
 Exemplo:
 ```bash
@@ -63,7 +65,8 @@ Como o projeto foi criado dentro de uma pasta de saída sem subpastas, todos os 
 
 - `server.js` — todo o backend (Express + Socket.IO + SQLite + rotas).
 - `index.html`, `style.css`, `app.js` — o front-end (uma única página).
-- `logo.svg` — logo da creche em SVG.
+- `logo.png` — logotipo completo (ícone + nome), usado na tela de login.
+- `logo-icon.png` — só o ícone circular, usado no topo do app e como ícone do site.
 - `package.json` — dependências do projeto.
 - `data/` e `uploads/` — criadas automaticamente ao rodar (banco SQLite e arquivos enviados no chat). **Não vá para o Git** — já é comum ignorá-las (veja abaixo).
 
@@ -78,24 +81,38 @@ uploads/
 
 ## Sobre o logo
 
-O logo que você enviou (casinha sorridente com telhado vermelho e gramado verde, dentro de um círculo, com "CEI Ângela Amin — Centro de Educação Infantil") foi **recriado como um SVG simples** com as mesmas cores e composição, porque este ambiente não conseguiu salvar a imagem original em formato binário. Se quiser usar o arquivo de logo original (PNG/JPG):
-
-1. Salve a imagem original como `logo.png` na mesma pasta dos outros arquivos.
-2. No `index.html`, troque as três ocorrências de `/logo.svg` por `/logo.png`.
-3. No `server.js`, no objeto `STATIC_FILES`, troque `'/logo.svg': 'logo.svg'` por `'/logo.png': 'logo.png'`.
+`logo.png` e `logo-icon.png` foram recortados diretamente do arquivo original que você enviou (`03 logotipo_vertical_com_fundo.png`), então é exatamente a sua arte — só redimensionada/otimizada para carregar rápido no navegador.
 
 ## Papéis e permissões (resumo)
 
-| Ação                                  | Responsável (pai) | Professor(a) | Cozinha | Direção |
-|----------------------------------------|:---:|:---:|:---:|:---:|
-| Entrar em turma pelo link              | ✅ | ✅ | ✅ | ✅ |
-| Criar turma / gerar convite             | ❌ | ✅ | ❌ | ✅ |
-| Enviar mensagens/fotos/PDF no chat      | ✅ | ✅ | ✅ (se estiver na turma) | ✅ |
-| Publicar cardápio                       | ❌ | ✅ | ✅ | ✅ |
-| Ver cardápio                            | ✅ | ✅ | ✅ | ✅ |
-| Lançar receita/despesa                  | ❌ | ✅ | ❌ | ✅ |
-| Ver financeiro                          | ✅ | ✅ | ✅ | ✅ |
-| Excluir lançamento financeiro           | ❌ | ❌ | ❌ | ✅ |
+| Ação | Responsável | Estagiária | Prof. Regente | Prof. Auxiliar | Cozinha | Diretora | Coord. Pedagógica | Secretária | Gestor |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Entrar em turma pelo link       | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Criar turma / gerar convite     | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| Enviar mensagens/fotos/PDF no chat | ✅ | ✅ (se estiver na turma) | ✅ | ✅ | ✅ (se estiver na turma) | ✅ | ✅ | ✅ (se estiver na turma) | ✅ |
+| Publicar cardápio               | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| Ver cardápio                    | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Remover item do cardápio de outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| Lançar receita/despesa          | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ |
+| Ver financeiro                  | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Excluir lançamento financeiro   | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
+
+Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi quem criou a turma).
+
+### Regra das mensagens privadas
+
+- Responsável ↔ Direção (Diretora, Coordenadora Pedagógica, Secretária, Gestor): sempre pode, mesmo sem estarem na mesma turma.
+- Responsável ↔ Professora Regente / Professora Auxiliar / Estagiária: só se essa pessoa da equipe estiver na(s) mesma(s) turma(s) que o responsável (ou seja, é professora do filho dela).
+- Responsável ↔ Responsável: **nunca permitido.**
+- Equipe ↔ Equipe (qualquer combinação de cargos da equipe): sempre pode.
+
+### Apagar mensagens
+
+- Chat da turma: dono da mensagem, professora regente ou qualquer pessoa da direção.
+- Conversa privada: só quem enviou a mensagem.
+- A mensagem não some do banco de dados — ela fica marcada como removida e aparece como "Mensagem removida" para preservar o histórico da conversa.
+
+Achou alguma dessas regras diferente do que sua creche precisa? É só pedir — dá pra ajustar cada linha dessa tabela facilmente no código (`server.js`, no topo, tem as listas `TURMA_CREATE_ROLES`, `CARDAPIO_ROLES`, `FIN_MANAGE_ROLES` etc.).
 
 ## Limitações conhecidas (é um app funcional, mas ainda um primeiro passo)
 

@@ -1,7 +1,7 @@
 {
   "name": "cei-angela-amin-app",
   "version": "1.0.0",
-  "description": "Aplicativo da CEI Angela Amin - chat por turma, cardapio diario e financeiro para pais e professores",
+  "description": "Aplicativo da CEI Angela Amin (Angela com acento: Ângela) - chat por turma, cardapio diario e financeiro para pais e equipe",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
