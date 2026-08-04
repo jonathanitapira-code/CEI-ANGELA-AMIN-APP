@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS users (
     'diretora','coordenadora_pedagogica','secretaria','gestor'
   )),
   avatar_filename TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -157,6 +158,15 @@ CREATE TABLE IF NOT EXISTS financeiro (
 );
 `);
 
+// Migracao segura para bancos que ja existiam antes da coluna "active" existir:
+// "CREATE TABLE IF NOT EXISTS" nao adiciona colunas novas em uma tabela que ja
+// existe no disco, entao aqui verificamos manualmente se a coluna ja existe e,
+// se nao existir, adicionamos com ALTER TABLE (isso NAO apaga nenhum dado).
+const userColumns = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+if (!userColumns.includes('active')) {
+  db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+}
+
 // ---------------------------------------------------------------------------
 // App / middlewares
 // ---------------------------------------------------------------------------
@@ -227,7 +237,10 @@ function publicUser(u) {
 function requireAuth(req, res, next) {
   if (!req.session.userId) return res.status(401).json({ error: 'Nao autenticado' });
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.session.userId);
-  if (!user) return res.status(401).json({ error: 'Nao autenticado' });
+  if (!user || !user.active) {
+    req.session.destroy(() => {});
+    return res.status(401).json({ error: 'Nao autenticado' });
+  }
   req.user = user;
   next();
 }
@@ -348,6 +361,9 @@ app.post('/api/login', (req, res) => {
   if (!user || !bcrypt.compareSync(password || '', user.password_hash)) {
     return res.status(401).json({ error: 'Telefone ou senha invalidos' });
   }
+  if (!user.active) {
+    return res.status(403).json({ error: 'Esta conta foi removida. Fale com a direcao da creche.' });
+  }
   req.session.userId = user.id;
   res.json({ user: publicUser(user) });
 });
@@ -366,10 +382,10 @@ app.get('/api/me', requireAuth, (req, res) => {
 // em vez de um link automatico por e-mail/SMS.
 // ---------------------------------------------------------------------------
 
-// Lista todos os usuarios cadastrados (nome/telefone/papel), para a tela
-// "Usuarios" de quem pode redefinir senha.
+// Lista os usuarios cadastrados e ativos (nome/telefone/papel), para a tela
+// "Usuarios" de quem pode redefinir senha, corrigir o papel ou excluir.
 app.get('/api/admin/users', requireAuth, requireRole(...DIRECAO_ROLES), (req, res) => {
-  const users = db.prepare('SELECT id, name, phone, role FROM users ORDER BY name COLLATE NOCASE').all();
+  const users = db.prepare('SELECT id, name, phone, role FROM users WHERE active = 1 ORDER BY name COLLATE NOCASE').all();
   res.json({ users: users.map(u => ({ ...u, roleLabel: ROLE_LABELS[u.role] })) });
 });
 
@@ -381,11 +397,48 @@ app.post('/api/admin/users/:id/reset-password', requireAuth, requireRole(...DIRE
   if (!newPassword || newPassword.length < 6) {
     return res.status(400).json({ error: 'A nova senha precisa ter pelo menos 6 caracteres' });
   }
-  const target = db.prepare('SELECT id FROM users WHERE id = ?').get(targetId);
+  const target = db.prepare('SELECT id FROM users WHERE id = ? AND active = 1').get(targetId);
   if (!target) return res.status(404).json({ error: 'Usuario nao encontrado' });
 
   const hash = bcrypt.hashSync(newPassword, 10);
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, targetId);
+  res.json({ ok: true });
+});
+
+// Corrige o papel de alguem que se cadastrou errado (ex: marcou "Responsavel"
+// mas na verdade e professora). Nao exige o codigo da equipe, ja que quem esta
+// fazendo a alteracao ja e da direcao/gestor.
+app.put('/api/admin/users/:id/role', requireAuth, requireRole(...DIRECAO_ROLES), (req, res) => {
+  const targetId = Number(req.params.id);
+  const { role } = req.body;
+  if (!ALL_ROLES.includes(role)) {
+    return res.status(400).json({ error: 'Papel invalido' });
+  }
+  const target = db.prepare('SELECT id FROM users WHERE id = ? AND active = 1').get(targetId);
+  if (!target) return res.status(404).json({ error: 'Usuario nao encontrado' });
+
+  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, targetId);
+  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(targetId);
+  res.json({ user: publicUser(updated) });
+});
+
+// Exclui um usuario. Como o historico de mensagens/cardapio/financeiro dessa
+// pessoa nao pode sumir (outras pessoas dependem desse historico continuar
+// aparecendo certinho no chat/relatorios), a conta e "desativada" em vez de
+// apagada de verdade: ela sai de todas as turmas, nao consegue mais entrar no
+// app, e o telefone dela fica livre para um novo cadastro (util quando alguem
+// se cadastrou duplicado ou saiu da creche).
+app.delete('/api/admin/users/:id', requireAuth, requireRole(...DIRECAO_ROLES), (req, res) => {
+  const targetId = Number(req.params.id);
+  if (targetId === req.user.id) {
+    return res.status(400).json({ error: 'Voce nao pode excluir a sua propria conta' });
+  }
+  const target = db.prepare('SELECT id FROM users WHERE id = ? AND active = 1').get(targetId);
+  if (!target) return res.status(404).json({ error: 'Usuario nao encontrado' });
+
+  const freedPhone = `removido_${targetId}_${Date.now()}`;
+  db.prepare('UPDATE users SET active = 0, phone = ? WHERE id = ?').run(freedPhone, targetId);
+  db.prepare('DELETE FROM turma_members WHERE user_id = ?').run(targetId);
   res.json({ ok: true });
 });
 
@@ -510,7 +563,7 @@ app.get('/api/turmas/:id/addable-users', requireAuth, requireTurmaMember, (req, 
   }
   const users = db.prepare(`
     SELECT u.id, u.name, u.role FROM users u
-    WHERE u.id NOT IN (SELECT user_id FROM turma_members WHERE turma_id = ?)
+    WHERE u.active = 1 AND u.id NOT IN (SELECT user_id FROM turma_members WHERE turma_id = ?)
     ORDER BY (u.role != 'pai'), u.name
   `).all(req.turmaId);
   res.json({ users: users.map(u => ({ ...u, roleLabel: ROLE_LABELS[u.role] })) });
@@ -520,7 +573,7 @@ app.post('/api/turmas/:id/members', requireAuth, requireTurmaMember, (req, res) 
   if (!canManageTurmaMembers(req.turmaId, req.user)) {
     return res.status(403).json({ error: 'Sem permissao para gerenciar membros desta turma' });
   }
-  const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(req.body.userId);
+  const targetUser = db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(req.body.userId);
   if (!targetUser) return res.status(404).json({ error: 'Pessoa nao encontrada' });
   if (targetUser.role === 'pai' && (!req.body.childName || !req.body.childName.trim())) {
     return res.status(400).json({ error: 'Informe o nome da crianca' });
@@ -703,7 +756,7 @@ app.delete('/api/messages/:id', requireAuth, (req, res) => {
 
 // Lista de pessoas com quem o usuario logado tem permissao de iniciar uma conversa nova
 app.get('/api/conversations/contacts', requireAuth, (req, res) => {
-  const candidates = db.prepare('SELECT * FROM users WHERE id != ?').all(req.user.id);
+  const candidates = db.prepare('SELECT * FROM users WHERE id != ? AND active = 1').all(req.user.id);
   const contacts = candidates
     .filter(c => canStartConversation(req.user, c))
     .map(c => ({

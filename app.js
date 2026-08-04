@@ -944,9 +944,18 @@
         </div>
         ${roleBadge(u.role, u.roleLabel)}
         <div class="spacer"></div>
-        <button class="btn secondary" style="padding:5px 10px;font-size:12px" data-reset="${u.id}">Redefinir senha</button>
+        ${u.id === state.user.id ? '<span style="font-size:11px;color:#999">(voce)</span>' : `
+          <button class="btn secondary" style="padding:5px 10px;font-size:12px" data-reset="${u.id}">Redefinir senha</button>
+          <button class="btn secondary" style="padding:5px 10px;font-size:12px" data-role="${u.id}">Alterar papel</button>
+          <button class="btn ghost" style="padding:5px 10px;font-size:12px;color:var(--red)" data-del="${u.id}">Excluir</button>
+        `}
       </div>`);
-      row.querySelector('[data-reset]').addEventListener('click', () => openResetPasswordModal(u));
+      const resetBtn = row.querySelector('[data-reset]');
+      if (resetBtn) resetBtn.addEventListener('click', () => openResetPasswordModal(u));
+      const roleBtn = row.querySelector('[data-role]');
+      if (roleBtn) roleBtn.addEventListener('click', () => openChangeRoleModal(u));
+      const delBtn = row.querySelector('[data-del]');
+      if (delBtn) delBtn.addEventListener('click', () => confirmDeleteUsuario(u));
       box.appendChild(row);
     });
   }
@@ -998,6 +1007,78 @@
         alert(`Senha de ${user.name} redefinida. Avise a nova senha para essa pessoa.`);
       } catch (err) {
         errBox.textContent = err.message;
+      }
+    });
+  }
+
+  const ROLE_OPTIONS_HTML = `
+    <optgroup label="Familia"><option value="pai">Responsavel (pai/mae)</option></optgroup>
+    <optgroup label="Sala">
+      <option value="professora_regente">Professora Regente</option>
+      <option value="professora_auxiliar">Professora Auxiliar</option>
+      <option value="estagiaria">Estagiaria</option>
+    </optgroup>
+    <optgroup label="Cozinha"><option value="cozinha">Cozinha</option></optgroup>
+    <optgroup label="Direcao">
+      <option value="diretora">Diretora</option>
+      <option value="coordenadora_pedagogica">Coordenadora Pedagogica</option>
+      <option value="secretaria">Secretaria</option>
+      <option value="gestor">Gestor</option>
+    </optgroup>`;
+
+  function openChangeRoleModal(user) {
+    openModal(`
+      <h3>Alterar papel</h3>
+      <p style="font-size:13px;color:#666">
+        Corrigindo o papel de <b>${escapeHtml(user.name)}</b>. Papel atual: ${roleBadge(user.role, user.roleLabel)}
+      </p>
+      <div class="field">
+        <label>Novo papel</label>
+        <select id="change-role-select">${ROLE_OPTIONS_HTML}</select>
+      </div>
+      <div class="error-msg" id="change-role-error"></div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="cancel-change-role">Cancelar</button>
+        <button class="btn" id="confirm-change-role">Salvar</button>
+      </div>
+    `);
+    document.getElementById('change-role-select').value = user.role;
+    document.getElementById('cancel-change-role').addEventListener('click', closeModal);
+    document.getElementById('confirm-change-role').addEventListener('click', async () => {
+      const errBox = document.getElementById('change-role-error');
+      const newRole = document.getElementById('change-role-select').value;
+      try {
+        await api('/api/admin/users/' + user.id + '/role', { method: 'PUT', body: { role: newRole } });
+        closeModal();
+        loadUsuarios();
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
+
+  function confirmDeleteUsuario(user) {
+    openModal(`
+      <h3>Excluir usuario</h3>
+      <p style="font-size:14px;color:#444;line-height:1.5">
+        Tem certeza que quer excluir <b>${escapeHtml(user.name)}</b> (${roleBadge(user.role, user.roleLabel)})?
+        A pessoa vai sair de todas as turmas e nao vai mais conseguir entrar no app.
+        O historico de mensagens, cardapio e financeiro que ela ja registrou continua visivel normalmente.
+      </p>
+      <div class="error-msg" id="del-usuario-error"></div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="cancel-del-usuario">Cancelar</button>
+        <button class="btn danger" id="confirm-del-usuario">Excluir</button>
+      </div>
+    `);
+    document.getElementById('cancel-del-usuario').addEventListener('click', closeModal);
+    document.getElementById('confirm-del-usuario').addEventListener('click', async () => {
+      try {
+        await api('/api/admin/users/' + user.id, { method: 'DELETE' });
+        closeModal();
+        loadUsuarios();
+      } catch (err) {
+        document.getElementById('del-usuario-error').textContent = err.message;
       }
     });
   }

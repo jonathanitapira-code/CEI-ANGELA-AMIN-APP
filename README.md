@@ -23,7 +23,8 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Financeiro simples com relatório mensal**: lançamentos de receitas e despesas com saldo calculado automaticamente. Tem um filtro por mês (ex: julho/2026) que mostra os totais só daquele período. Diretora, Gestor e Secretária lançam; qualquer pessoa logada pode visualizar (transparência com as famílias); só Diretora e Gestor podem excluir lançamentos.
 - **Logo da creche** no topo do app e na tela de login — usando a arte original que você enviou (recortada e otimizada para web).
 - **Instalar como aplicativo no celular (PWA)**: o app pode ser adicionado à tela inicial do Android/iPhone e abrir em tela cheia, como um app "de verdade" — sem precisar de loja de aplicativos. Veja a seção "📲 Instalar como aplicativo no celular" abaixo.
-- **Esqueceu a senha? Redefinir senha**: como o login é por telefone (sem e-mail/SMS cadastrado), não existe um link automático de "recuperar senha" por enquanto. Na tela de login há um botão "Esqueceu sua senha?" explicando isso. A redefinição é feita por alguém da Direção (Diretora, Coordenadora Pedagógica, Secretária) ou pelo Gestor, direto no app, na nova aba **"Usuários"**: buscar a pessoa pelo nome/telefone, clicar em "Redefinir senha", definir uma senha temporária e avisar essa pessoa diretamente (telefone, WhatsApp, pessoalmente).
+- **Esqueceu a senha? Redefinir senha**: como o login é por telefone (sem e-mail/SMS cadastrado), não existe um link automático de "recuperar senha" por enquanto. Na tela de login há um botão "Esqueceu sua senha?" explicando isso. A redefinição é feita por alguém da Direção (Diretora, Coordenadora Pedagógica, Secretária) ou pelo Gestor, direto no app, na aba **"Usuários"**: buscar a pessoa pelo nome/telefone, clicar em "Redefinir senha", definir uma senha temporária e avisar essa pessoa diretamente (telefone, WhatsApp, pessoalmente).
+- **Corrigir cadastro errado / excluir usuário**: na mesma aba "Usuários", Direção e Gestor também podem clicar em **"Alterar papel"** (útil quando alguém marcou "Responsável" mas na verdade é da equipe, ou vice-versa) ou em **"Excluir"** (a pessoa sai de todas as turmas e não consegue mais entrar no app; o histórico de mensagens/cardápio/financeiro que ela já registrou continua aparecendo normalmente para os outros, e o número de telefone dela fica livre para um cadastro novo). Ninguém consegue alterar/excluir a própria conta por essa tela.
 
 ## 📲 Instalar como aplicativo no celular
 
@@ -38,6 +39,8 @@ Depois de instalado, o app abre sem a barra de endereço do navegador, com o íc
 ## ⚠️ Sobre esta atualização especificamente
 
 O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas foram adicionadas (foto de perfil, etc). Por isso o banco de dados passou a usar um arquivo novo (`creche_v2.db` em vez de `creche.db`). **Mesmo com o disco persistente configurado, essa atualização específica vai fazer todo mundo precisar se cadastrar de novo uma última vez** — depois disso, com o disco persistente, os dados ficam salvos normalmente nas próximas atualizações (contanto que eu não mude a estrutura das tabelas de novo).
+
+**Sobre a atualização de "excluir/alterar papel de usuário"**: essa aqui adiciona uma coluna nova (`active`) na tabela de usuários, mas de um jeito seguro que **não apaga nem exige recadastro de ninguém** — o próprio código detecta se a coluna já existe e adiciona sem mexer nos dados existentes.
 
 ## Como rodar localmente
 
@@ -139,6 +142,7 @@ uploads/
 | Ver financeiro (incl. relatório mensal) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Excluir lançamento financeiro   | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
 | Redefinir senha de outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Alterar papel / excluir outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 
 Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi adicionada por quem gerencia a turma).
 
