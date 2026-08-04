@@ -6,7 +6,7 @@
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
   const STAFF_ROLES = ['estagiaria', 'professora_regente', 'professora_auxiliar', 'cozinha', 'diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
-  const TURMA_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'diretora', 'coordenadora_pedagogica', 'gestor'];
+  const TURMA_CREATE_ROLES = ['gestor'];
   const CARDAPIO_ROLES = ['cozinha', 'professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'gestor'];
   const CARDAPIO_ADMIN_ROLES = ['diretora', 'coordenadora_pedagogica', 'gestor'];
   const FIN_MANAGE_ROLES = ['diretora', 'gestor', 'secretaria'];
@@ -62,6 +62,16 @@
 
   function roleBadge(role, label) {
     return `<span class="role-badge role-${role}">${label}</span>`;
+  }
+
+  // Retorna a foto de perfil (se tiver) ou um circulo com a inicial do nome
+  function avatarHtml(user, sizeClass) {
+    const cls = sizeClass ? ` ${sizeClass}` : '';
+    if (user && user.avatarUrl) {
+      return `<img class="avatar-img${cls}" src="${user.avatarUrl}" alt="" />`;
+    }
+    const letter = user && user.name ? user.name.trim().charAt(0).toUpperCase() : '?';
+    return `<div class="avatar-fallback${cls}">${escapeHtml(letter)}</div>`;
   }
 
   function escapeHtml(s) {
@@ -160,7 +170,7 @@
       const data = await api('/api/login', {
         method: 'POST',
         body: {
-          email: document.getElementById('login-email').value,
+          phone: document.getElementById('login-phone').value,
           password: document.getElementById('login-password').value
         }
       });
@@ -179,7 +189,7 @@
         method: 'POST',
         body: {
           name: document.getElementById('reg-name').value,
-          email: document.getElementById('reg-email').value,
+          phone: document.getElementById('reg-phone').value,
           password: document.getElementById('reg-password').value,
           role: regRole.value,
           staffCode: document.getElementById('reg-staffcode').value
@@ -200,6 +210,60 @@
   document.getElementById('btn-logout').addEventListener('click', async () => {
     await api('/api/logout', { method: 'POST' });
     location.href = '/';
+  });
+
+  // ------------------------------------------------------------------
+  // Perfil / foto de perfil
+  // ------------------------------------------------------------------
+  function updateTopbarAvatar() {
+    const img = document.getElementById('user-avatar-img');
+    const fallback = document.getElementById('user-avatar-fallback');
+    if (state.user.avatarUrl) {
+      img.src = state.user.avatarUrl;
+      img.classList.remove('hidden');
+      fallback.classList.add('hidden');
+    } else {
+      img.classList.add('hidden');
+      fallback.classList.remove('hidden');
+      fallback.textContent = state.user.name ? state.user.name.trim().charAt(0).toUpperCase() : '?';
+    }
+  }
+
+  document.getElementById('btn-profile').addEventListener('click', () => {
+    const modal = openModal(`
+      <h3>Meu perfil</h3>
+      <div class="avatar-upload-wrap">
+        ${avatarHtml(state.user)}
+        <div>
+          <input type="file" id="avatar-input" accept="image/png,image/jpeg,image/webp" class="hidden" />
+          <button class="btn secondary" id="btn-change-avatar">Trocar foto</button>
+        </div>
+      </div>
+      <p style="font-size:13px;color:#666;text-align:center">
+        <b>${escapeHtml(state.user.name)}</b><br/>
+        ${roleBadge(state.user.role, state.user.roleLabel)}<br/>
+        Telefone: ${escapeHtml(state.user.phone || '')}
+      </p>
+      <div class="error-msg" id="avatar-error"></div>
+      <div class="modal-actions"><button class="btn" id="close-profile">Fechar</button></div>
+    `);
+    document.getElementById('close-profile').addEventListener('click', closeModal);
+    const avatarInput = document.getElementById('avatar-input');
+    document.getElementById('btn-change-avatar').addEventListener('click', () => avatarInput.click());
+    avatarInput.addEventListener('change', async () => {
+      const file = avatarInput.files[0];
+      if (!file) return;
+      try {
+        const fd = new FormData();
+        fd.append('avatar', file);
+        const data = await api('/api/me/avatar', { method: 'POST', body: fd });
+        state.user.avatarUrl = data.avatarUrl;
+        updateTopbarAvatar();
+        closeModal();
+      } catch (err) {
+        document.getElementById('avatar-error').textContent = err.message;
+      }
+    });
   });
 
   // ------------------------------------------------------------------
@@ -246,6 +310,7 @@
     const badge = document.getElementById('user-role-badge');
     badge.textContent = state.user.roleLabel;
     badge.className = 'role-badge role-' + state.user.role;
+    updateTopbarAvatar();
     document.getElementById('btn-new-turma').classList.toggle('hidden', !TURMA_CREATE_ROLES.includes(state.user.role));
     document.getElementById('btn-new-meal').classList.toggle('hidden', !CARDAPIO_ROLES.includes(state.user.role));
     document.getElementById('btn-new-lancamento').classList.toggle('hidden', !FIN_MANAGE_ROLES.includes(state.user.role));
@@ -463,30 +528,93 @@
     if (state.chat && state.chat.type === 'turma') showInviteModal({ name: state.chat.name, invite_code: state.chat.inviteCode });
   });
 
-  document.getElementById('btn-members').addEventListener('click', async () => {
-    if (!state.chat || state.chat.type !== 'turma') return;
-    const data = await api(`/api/turmas/${state.chat.id}/members`);
+  async function renderMembersModal() {
+    const turmaId = state.chat.id;
+    const data = await api(`/api/turmas/${turmaId}/members`);
     const rows = data.members.map(m => `
       <div class="member-row">
+        ${avatarHtml(m)}
         ${roleBadge(m.role, m.roleLabel)}
         <div>
           <div class="name">${escapeHtml(m.name)}</div>
           ${m.child_name ? `<div class="child">Responsavel por: ${escapeHtml(m.child_name)}</div>` : ''}
         </div>
+        <div class="spacer"></div>
+        ${data.canManage && m.id !== state.user.id ? `<button class="remove-member" data-remove-user="${m.id}">remover</button>` : ''}
       </div>`).join('');
-    openModal(`
+    const modal = openModal(`
       <h3>Quem e quem</h3>
       <div>${rows || '<p>Nenhum participante ainda.</p>'}</div>
-      <div class="modal-actions"><button class="btn" id="close-members">Fechar</button></div>
+      <div class="modal-actions">
+        ${data.canManage ? '<button class="btn secondary" id="btn-add-member">+ Adicionar pessoa</button>' : ''}
+        <button class="btn" id="close-members">Fechar</button>
+      </div>
     `);
     document.getElementById('close-members').addEventListener('click', closeModal);
+    modal.querySelectorAll('[data-remove-user]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Remover esta pessoa da turma?')) return;
+        try {
+          await api(`/api/turmas/${turmaId}/members/${btn.dataset.removeUser}`, { method: 'DELETE' });
+          renderMembersModal();
+        } catch (err) {
+          alert('Erro ao remover: ' + err.message);
+        }
+      });
+    });
+    const addBtn = document.getElementById('btn-add-member');
+    if (addBtn) addBtn.addEventListener('click', () => openAddMemberModal(turmaId));
+  }
+
+  async function openAddMemberModal(turmaId) {
+    let users = [];
+    try {
+      const data = await api(`/api/turmas/${turmaId}/addable-users`);
+      users = data.users;
+    } catch (err) {
+      alert('Erro ao carregar pessoas: ' + err.message);
+      return;
+    }
+    const rows = users.map(u => `
+      <div class="member-row contact-row" data-add-user="${u.id}" data-role="${u.role}" style="cursor:pointer">
+        ${roleBadge(u.role, u.roleLabel)}
+        <div><div class="name">${escapeHtml(u.name)}</div></div>
+      </div>`).join('');
+    const modal = openModal(`
+      <h3>Adicionar pessoa a turma</h3>
+      <div>${rows || '<p>Nao ha ninguem disponivel para adicionar no momento.</p>'}</div>
+      <div class="modal-actions"><button class="btn secondary" id="cancel-add-member">Voltar</button></div>
+    `);
+    document.getElementById('cancel-add-member').addEventListener('click', () => renderMembersModal());
+    modal.querySelectorAll('[data-add-user]').forEach(row => {
+      row.addEventListener('click', async () => {
+        const userId = Number(row.dataset.addUser);
+        let childName = '';
+        if (row.dataset.role === 'pai') {
+          childName = prompt('Nome da crianca que essa pessoa representa:') || '';
+          if (!childName.trim()) return;
+        }
+        try {
+          await api(`/api/turmas/${turmaId}/members`, { method: 'POST', body: { userId, childName } });
+          await loadTurmas();
+          renderMembersModal();
+        } catch (err) {
+          alert('Erro ao adicionar: ' + err.message);
+        }
+      });
+    });
+  }
+
+  document.getElementById('btn-members').addEventListener('click', () => {
+    if (!state.chat || state.chat.type !== 'turma') return;
+    renderMembersModal();
   });
 
   function appendMessage(msg) {
     const mine = msg.user.id === state.user.id;
     const wrap = el(`<div class="msg ${mine ? 'mine' : ''}" data-msg-id="${msg.id}"></div>`);
     const meta = el(`<div class="meta"></div>`);
-    meta.innerHTML = `<b>${escapeHtml(msg.user.name)}</b> ${roleBadge(msg.user.role, msg.user.roleLabel)} <span>${fmtDateTime(msg.createdAt)}</span>`;
+    meta.innerHTML = `${avatarHtml(msg.user, 'small')} <b>${escapeHtml(msg.user.name)}</b> ${roleBadge(msg.user.role, msg.user.roleLabel)} <span>${fmtDateTime(msg.createdAt)}</span>`;
     if (msg.canDelete) {
       const delBtn = el(`<button class="msg-del" title="Apagar mensagem">🗑</button>`);
       delBtn.addEventListener('click', () => deleteMessage(msg.id));
@@ -603,7 +731,7 @@
     }
     data.conversations.forEach(c => {
       const card = el(`<div class="turma-card">
-        <h3>${escapeHtml(c.other.name)} ${roleBadge(c.other.role, c.other.roleLabel)}</h3>
+        <h3>${avatarHtml(c.other, 'small')} ${escapeHtml(c.other.name)} ${roleBadge(c.other.role, c.other.roleLabel)}</h3>
         <p>${c.lastMessagePreview ? escapeHtml(c.lastMessagePreview) : 'Nenhuma mensagem ainda'}</p>
       </div>`);
       card.addEventListener('click', () => openConversation(c));
@@ -622,6 +750,7 @@
     }
     const rows = contacts.map(c => `
       <div class="member-row contact-row" data-user-id="${c.id}" style="cursor:pointer">
+        ${avatarHtml(c)}
         ${roleBadge(c.role, c.roleLabel)}
         <div><div class="name">${escapeHtml(c.name)}</div></div>
       </div>`).join('');
@@ -653,7 +782,7 @@
     NAV_VIEWS.forEach(v => document.getElementById('view-' + v).classList.add('hidden'));
     document.querySelector('.nav-tabs').classList.add('hidden');
     document.getElementById('chat-turma-name').innerHTML =
-      `${escapeHtml(conv.other.name)} ${roleBadge(conv.other.role, conv.other.roleLabel)}`;
+      `${avatarHtml(conv.other, 'small')} ${escapeHtml(conv.other.name)} ${roleBadge(conv.other.role, conv.other.roleLabel)}`;
     document.getElementById('btn-invite').classList.add('hidden');
     document.getElementById('btn-members').classList.add('hidden');
     document.getElementById('chat-messages').innerHTML = '';
@@ -737,8 +866,15 @@
   // ------------------------------------------------------------------
   // Financeiro
   // ------------------------------------------------------------------
+  document.getElementById('fin-month-filter').addEventListener('change', loadFinanceiro);
+  document.getElementById('btn-fin-clear-month').addEventListener('click', () => {
+    document.getElementById('fin-month-filter').value = '';
+    loadFinanceiro();
+  });
+
   async function loadFinanceiro() {
-    const data = await api('/api/financeiro');
+    const month = document.getElementById('fin-month-filter').value;
+    const data = await api('/api/financeiro' + (month ? '?month=' + month : ''));
     document.getElementById('fin-receitas').textContent = fmtBRL(data.totals.receitas);
     document.getElementById('fin-despesas').textContent = fmtBRL(data.totals.despesas);
     document.getElementById('fin-saldo').textContent = fmtBRL(data.totals.saldo);

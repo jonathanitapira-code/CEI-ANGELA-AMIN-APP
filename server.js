@@ -47,25 +47,33 @@ const STAFF_CODE = process.env.STAFF_CODE || 'creche2026';
 const DISK_MOUNT_PATH = process.env.DISK_MOUNT_PATH || __dirname;
 const DATA_DIR = path.join(DISK_MOUNT_PATH, 'data');
 const UPLOAD_DIR = path.join(DISK_MOUNT_PATH, 'uploads');
+const AVATAR_DIR = path.join(DISK_MOUNT_PATH, 'avatars');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+if (!fs.existsSync(AVATAR_DIR)) fs.mkdirSync(AVATAR_DIR, { recursive: true });
 
 // ---------------------------------------------------------------------------
 // Banco de dados
 // ---------------------------------------------------------------------------
-const db = new Database(path.join(DATA_DIR, 'creche.db'));
+// Nome do arquivo do banco: mudou de "creche.db" para "creche_v2.db" nesta
+// atualizacao porque a tabela de usuarios mudou (e-mail virou telefone, entre
+// outras colunas novas) - tabelas ja existentes no disco NAO sao alteradas
+// automaticamente pelo "CREATE TABLE IF NOT EXISTS". Usar um nome novo garante
+// que o banco seja criado do zero, ja com a estrutura certa, sem dar erro.
+const db = new Database(path.join(DATA_DIR, 'creche_v2.db'));
 db.pragma('journal_mode = WAL');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
-  email TEXT UNIQUE NOT NULL,
+  phone TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL CHECK(role IN (
     'pai','estagiaria','professora_regente','professora_auxiliar','cozinha',
     'diretora','coordenadora_pedagogica','secretaria','gestor'
   )),
+  avatar_filename TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -188,8 +196,9 @@ const ROLE_LABELS = {
 const ALL_ROLES = Object.keys(ROLE_LABELS);
 const STAFF_ROLES = ALL_ROLES.filter(r => r !== 'pai');
 
-// Quem pode criar turmas (professoras regentes/auxiliares e lideranca)
-const TURMA_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'diretora', 'coordenadora_pedagogica', 'gestor'];
+// O Gestor tem acesso a tudo (superusuario) - so ele cria turma. As demais
+// permissoes abaixo continuam valendo para os outros cargos como ja estava.
+const TURMA_CREATE_ROLES = ['gestor'];
 // Quem pode publicar no cardapio
 const CARDAPIO_ROLES = ['cozinha', 'professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'gestor'];
 // Quem pode remover itens do cardapio criados por outra pessoa
@@ -205,7 +214,14 @@ const MODERACAO_TURMA_ROLES = ['professora_regente', ...DIRECAO_ROLES];
 
 function publicUser(u) {
   if (!u) return null;
-  return { id: u.id, name: u.name, email: u.email, role: u.role, roleLabel: ROLE_LABELS[u.role] };
+  return {
+    id: u.id,
+    name: u.name,
+    phone: u.phone,
+    role: u.role,
+    roleLabel: ROLE_LABELS[u.role],
+    avatarUrl: u.avatar_filename ? `/api/avatar/${u.id}` : null
+  };
 }
 
 function requireAuth(req, res, next) {
@@ -216,12 +232,11 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// O Gestor sempre passa em qualquer checagem de papel (acesso total).
 function requireRole(...roles) {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Sem permissao para esta acao' });
-    }
-    next();
+    if (req.user.role === 'gestor' || roles.includes(req.user.role)) return next();
+    return res.status(403).json({ error: 'Sem permissao para esta acao' });
   };
 }
 
@@ -229,13 +244,25 @@ function isTurmaMember(turmaId, userId) {
   return db.prepare('SELECT 1 FROM turma_members WHERE turma_id = ? AND user_id = ?').get(turmaId, userId);
 }
 
+// O Gestor pode acessar qualquer turma mesmo sem ser membro dela (acesso total).
+function canAccessTurma(turmaId, user) {
+  return user.role === 'gestor' || !!isTurmaMember(turmaId, user.id);
+}
+
 function requireTurmaMember(req, res, next) {
   const turmaId = Number(req.params.id || req.body.turmaId || req.query.turmaId);
-  if (!turmaId || !isTurmaMember(turmaId, req.user.id)) {
+  if (!turmaId || !canAccessTurma(turmaId, req.user)) {
     return res.status(403).json({ error: 'Voce nao faz parte desta turma' });
   }
   req.turmaId = turmaId;
   next();
+}
+
+// Quem pode adicionar/remover membros de uma turma: Gestor (qualquer turma),
+// Coordenadora Pedagogica (qualquer turma) ou a Professora Regente daquela turma especifica
+function canManageTurmaMembers(turmaId, user) {
+  if (user.role === 'gestor' || user.role === 'coordenadora_pedagogica') return true;
+  return user.role === 'professora_regente' && !!isTurmaMember(turmaId, user.id);
 }
 
 // Duas pessoas "compartilham turma" se aparecem juntas em pelo menos uma turma_members
@@ -277,12 +304,23 @@ function requireConversationParticipant(req, res, next) {
 }
 
 // ---------------------------------------------------------------------------
-// Auth
+// Auth (login por numero de telefone + senha)
 // ---------------------------------------------------------------------------
+
+// Normaliza um telefone para so digitos (aceita o usuario digitar com
+// parenteses, espacos, tracos, +55 etc; guardamos so os numeros)
+function normalizePhone(raw) {
+  return (raw || '').replace(/\D/g, '');
+}
+
 app.post('/api/register', (req, res) => {
-  const { name, email, password, role, staffCode } = req.body;
-  if (!name || !email || !password || !role) {
-    return res.status(400).json({ error: 'Preencha nome, e-mail, senha e papel' });
+  const { name, password, role, staffCode } = req.body;
+  const phone = normalizePhone(req.body.phone);
+  if (!name || !phone || !password || !role) {
+    return res.status(400).json({ error: 'Preencha nome, telefone, senha e papel' });
+  }
+  if (phone.length < 10 || phone.length > 13) {
+    return res.status(400).json({ error: 'Numero de telefone invalido (informe DDD + numero)' });
   }
   if (!ALL_ROLES.includes(role)) {
     return res.status(400).json({ error: 'Papel invalido' });
@@ -290,13 +328,13 @@ app.post('/api/register', (req, res) => {
   if (STAFF_ROLES.includes(role) && staffCode !== STAFF_CODE) {
     return res.status(403).json({ error: 'Codigo da equipe invalido. Peça o codigo a direcao da creche.' });
   }
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase().trim());
-  if (existing) return res.status(409).json({ error: 'Ja existe uma conta com este e-mail' });
+  const existing = db.prepare('SELECT id FROM users WHERE phone = ?').get(phone);
+  if (existing) return res.status(409).json({ error: 'Ja existe uma conta com este numero de telefone' });
 
   const hash = bcrypt.hashSync(password, 10);
   const info = db.prepare(
-    'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)'
-  ).run(name.trim(), email.toLowerCase().trim(), hash, role);
+    'INSERT INTO users (name, phone, password_hash, role) VALUES (?, ?, ?, ?)'
+  ).run(name.trim(), phone, hash, role);
 
   req.session.userId = info.lastInsertRowid;
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
@@ -304,10 +342,11 @@ app.post('/api/register', (req, res) => {
 });
 
 app.post('/api/login', (req, res) => {
-  const { email, password } = req.body;
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get((email || '').toLowerCase().trim());
+  const phone = normalizePhone(req.body.phone);
+  const { password } = req.body;
+  const user = db.prepare('SELECT * FROM users WHERE phone = ?').get(phone);
   if (!user || !bcrypt.compareSync(password || '', user.password_hash)) {
-    return res.status(401).json({ error: 'E-mail ou senha invalidos' });
+    return res.status(401).json({ error: 'Telefone ou senha invalidos' });
   }
   req.session.userId = user.id;
   res.json({ user: publicUser(user) });
@@ -319,6 +358,45 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/me', requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user) });
+});
+
+// ---------------------------------------------------------------------------
+// Foto de perfil
+// ---------------------------------------------------------------------------
+const uploadAvatar = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, AVATAR_DIR),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      cb(null, `u${req.user.id}-` + crypto.randomBytes(8).toString('hex') + ext);
+    }
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const okImage = ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype);
+    if (okImage) return cb(null, true);
+    cb(new Error('Envie uma imagem (jpg, png ou webp) para a foto de perfil.'));
+  }
+});
+
+app.post('/api/me/avatar', requireAuth, uploadAvatar.single('avatar'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Nenhuma imagem enviada' });
+  const old = req.user.avatar_filename;
+  db.prepare('UPDATE users SET avatar_filename = ? WHERE id = ?').run(req.file.filename, req.user.id);
+  if (old) {
+    const oldPath = path.join(AVATAR_DIR, old);
+    fs.unlink(oldPath, () => {});
+  }
+  res.json({ avatarUrl: `/api/avatar/${req.user.id}` });
+});
+
+app.get('/api/avatar/:userId', requireAuth, (req, res) => {
+  const u = db.prepare('SELECT avatar_filename FROM users WHERE id = ?').get(req.params.userId);
+  if (!u || !u.avatar_filename) return res.status(404).end();
+  const filePath = path.join(AVATAR_DIR, u.avatar_filename);
+  if (!fs.existsSync(filePath)) return res.status(404).end();
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  fs.createReadStream(filePath).pipe(res);
 });
 
 // ---------------------------------------------------------------------------
@@ -339,13 +417,20 @@ app.post('/api/turmas', requireAuth, requireRole(...TURMA_CREATE_ROLES), (req, r
 });
 
 app.get('/api/turmas', requireAuth, (req, res) => {
-  const turmas = db.prepare(`
-    SELECT t.*, (SELECT COUNT(*) FROM turma_members m WHERE m.turma_id = t.id) as member_count
-    FROM turmas t
-    JOIN turma_members tm ON tm.turma_id = t.id
-    WHERE tm.user_id = ?
-    ORDER BY t.created_at DESC
-  `).all(req.user.id);
+  // Gestor enxerga todas as turmas da creche (acesso total), mesmo sem ter entrado nelas
+  const turmas = req.user.role === 'gestor'
+    ? db.prepare(`
+        SELECT t.*, (SELECT COUNT(*) FROM turma_members m WHERE m.turma_id = t.id) as member_count
+        FROM turmas t
+        ORDER BY t.created_at DESC
+      `).all()
+    : db.prepare(`
+        SELECT t.*, (SELECT COUNT(*) FROM turma_members m WHERE m.turma_id = t.id) as member_count
+        FROM turmas t
+        JOIN turma_members tm ON tm.turma_id = t.id
+        WHERE tm.user_id = ?
+        ORDER BY t.created_at DESC
+      `).all(req.user.id);
   res.json({ turmas });
 });
 
@@ -373,15 +458,59 @@ app.post('/api/turmas/join', requireAuth, (req, res) => {
 
 app.get('/api/turmas/:id/members', requireAuth, requireTurmaMember, (req, res) => {
   const members = db.prepare(`
-    SELECT u.id, u.name, u.role, m.child_name
+    SELECT u.id, u.name, u.role, u.avatar_filename, m.child_name
     FROM turma_members m
     JOIN users u ON u.id = m.user_id
     WHERE m.turma_id = ?
     ORDER BY (u.role != 'pai'), u.name
   `).all(req.turmaId);
   res.json({
-    members: members.map(m => ({ ...m, roleLabel: ROLE_LABELS[m.role] }))
+    canManage: canManageTurmaMembers(req.turmaId, req.user),
+    members: members.map(m => ({
+      id: m.id, name: m.name, role: m.role, child_name: m.child_name,
+      roleLabel: ROLE_LABELS[m.role],
+      avatarUrl: m.avatar_filename ? `/api/avatar/${m.id}` : null
+    }))
   });
+});
+
+// Lista pessoas que ainda nao estao na turma, para adicionar diretamente (sem link)
+app.get('/api/turmas/:id/addable-users', requireAuth, requireTurmaMember, (req, res) => {
+  if (!canManageTurmaMembers(req.turmaId, req.user)) {
+    return res.status(403).json({ error: 'Sem permissao para gerenciar membros desta turma' });
+  }
+  const users = db.prepare(`
+    SELECT u.id, u.name, u.role FROM users u
+    WHERE u.id NOT IN (SELECT user_id FROM turma_members WHERE turma_id = ?)
+    ORDER BY (u.role != 'pai'), u.name
+  `).all(req.turmaId);
+  res.json({ users: users.map(u => ({ ...u, roleLabel: ROLE_LABELS[u.role] })) });
+});
+
+app.post('/api/turmas/:id/members', requireAuth, requireTurmaMember, (req, res) => {
+  if (!canManageTurmaMembers(req.turmaId, req.user)) {
+    return res.status(403).json({ error: 'Sem permissao para gerenciar membros desta turma' });
+  }
+  const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(req.body.userId);
+  if (!targetUser) return res.status(404).json({ error: 'Pessoa nao encontrada' });
+  if (targetUser.role === 'pai' && (!req.body.childName || !req.body.childName.trim())) {
+    return res.status(400).json({ error: 'Informe o nome da crianca' });
+  }
+  if (isTurmaMember(req.turmaId, targetUser.id)) {
+    return res.status(409).json({ error: 'Essa pessoa ja esta na turma' });
+  }
+  db.prepare('INSERT INTO turma_members (turma_id, user_id, child_name) VALUES (?, ?, ?)')
+    .run(req.turmaId, targetUser.id, targetUser.role === 'pai' ? req.body.childName.trim() : null);
+  res.json({ ok: true });
+});
+
+app.delete('/api/turmas/:id/members/:userId', requireAuth, requireTurmaMember, (req, res) => {
+  if (!canManageTurmaMembers(req.turmaId, req.user)) {
+    return res.status(403).json({ error: 'Sem permissao para gerenciar membros desta turma' });
+  }
+  db.prepare('DELETE FROM turma_members WHERE turma_id = ? AND user_id = ?')
+    .run(req.turmaId, req.params.userId);
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -439,7 +568,7 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
   const beforeId = req.query.before ? Number(req.query.before) : null;
 
   const baseSelect = `
-    SELECT msg.*, u.name as user_name, u.role as user_role,
+    SELECT msg.*, u.name as user_name, u.role as user_role, u.avatar_filename as user_avatar,
            a.id as att_id, a.kind as att_kind, a.original_name as att_name,
            du.name as deleted_by_name
     FROM messages msg
@@ -461,7 +590,10 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
       id: r.id,
       content: r.deleted_at ? null : r.content,
       createdAt: r.created_at,
-      user: { id: r.user_id, name: r.user_name, role: r.user_role, roleLabel: ROLE_LABELS[r.user_role] },
+      user: {
+        id: r.user_id, name: r.user_name, role: r.user_role, roleLabel: ROLE_LABELS[r.user_role],
+        avatarUrl: r.user_avatar ? `/api/avatar/${r.user_id}` : null
+      },
       attachment: (!r.deleted_at && r.att_id) ? { id: r.att_id, kind: r.att_kind, name: r.att_name } : null,
       deleted: !!r.deleted_at,
       deletedByName: r.deleted_by_name || null,
@@ -486,7 +618,7 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
   ).run(req.turmaId, req.user.id, content ? content.trim() : null, attachmentId || null);
 
   const row = db.prepare(`
-    SELECT msg.*, u.name as user_name, u.role as user_role,
+    SELECT msg.*, u.name as user_name, u.role as user_role, u.avatar_filename as user_avatar,
            a.id as att_id, a.kind as att_kind, a.original_name as att_name
     FROM messages msg
     JOIN users u ON u.id = msg.user_id
@@ -499,7 +631,10 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
     turmaId: req.turmaId,
     content: row.content,
     createdAt: row.created_at,
-    user: { id: row.user_id, name: row.user_name, role: row.user_role, roleLabel: ROLE_LABELS[row.user_role] },
+    user: {
+      id: row.user_id, name: row.user_name, role: row.user_role, roleLabel: ROLE_LABELS[row.user_role],
+      avatarUrl: row.user_avatar ? `/api/avatar/${row.user_id}` : null
+    },
     attachment: row.att_id ? { id: row.att_id, kind: row.att_kind, name: row.att_name } : null,
     deleted: false,
     deletedByName: null,
@@ -542,7 +677,10 @@ app.get('/api/conversations/contacts', requireAuth, (req, res) => {
   const candidates = db.prepare('SELECT * FROM users WHERE id != ?').all(req.user.id);
   const contacts = candidates
     .filter(c => canStartConversation(req.user, c))
-    .map(c => ({ id: c.id, name: c.name, role: c.role, roleLabel: ROLE_LABELS[c.role] }));
+    .map(c => ({
+      id: c.id, name: c.name, role: c.role, roleLabel: ROLE_LABELS[c.role],
+      avatarUrl: c.avatar_filename ? `/api/avatar/${c.id}` : null
+    }));
   res.json({ contacts });
 });
 
@@ -560,14 +698,17 @@ app.get('/api/conversations', requireAuth, (req, res) => {
   `).all(req.user.id, req.user.id, req.user.id);
 
   const conversations = rows.map(r => {
-    const other = db.prepare('SELECT id, name, role FROM users WHERE id = ?').get(r.other_id);
+    const other = db.prepare('SELECT id, name, role, avatar_filename FROM users WHERE id = ?').get(r.other_id);
     let preview = null;
     if (r.last_deleted_at) preview = 'Mensagem removida';
     else if (r.last_content) preview = r.last_content;
     else if (r.last_attachment_id) preview = 'Anexo';
     return {
       id: r.id,
-      other: { id: other.id, name: other.name, role: other.role, roleLabel: ROLE_LABELS[other.role] },
+      other: {
+        id: other.id, name: other.name, role: other.role, roleLabel: ROLE_LABELS[other.role],
+        avatarUrl: other.avatar_filename ? `/api/avatar/${other.id}` : null
+      },
       lastMessagePreview: preview,
       lastMessageAt: r.last_at || r.created_at
     };
@@ -590,13 +731,19 @@ app.post('/api/conversations', requireAuth, (req, res) => {
     conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(info.lastInsertRowid);
   }
   res.json({
-    conversation: { id: conv.id, other: { id: other.id, name: other.name, role: other.role, roleLabel: ROLE_LABELS[other.role] } }
+    conversation: {
+      id: conv.id,
+      other: {
+        id: other.id, name: other.name, role: other.role, roleLabel: ROLE_LABELS[other.role],
+        avatarUrl: other.avatar_filename ? `/api/avatar/${other.id}` : null
+      }
+    }
   });
 });
 
 app.get('/api/conversations/:id/messages', requireAuth, requireConversationParticipant, (req, res) => {
   const rows = db.prepare(`
-    SELECT m.*, u.name as sender_name, u.role as sender_role,
+    SELECT m.*, u.name as sender_name, u.role as sender_role, u.avatar_filename as sender_avatar,
            a.id as att_id, a.kind as att_kind, a.original_name as att_name
     FROM dm_messages m
     JOIN users u ON u.id = m.sender_id
@@ -611,7 +758,10 @@ app.get('/api/conversations/:id/messages', requireAuth, requireConversationParti
       id: r.id,
       content: r.deleted_at ? null : r.content,
       createdAt: r.created_at,
-      user: { id: r.sender_id, name: r.sender_name, role: r.sender_role, roleLabel: ROLE_LABELS[r.sender_role] },
+      user: {
+        id: r.sender_id, name: r.sender_name, role: r.sender_role, roleLabel: ROLE_LABELS[r.sender_role],
+        avatarUrl: r.sender_avatar ? `/api/avatar/${r.sender_id}` : null
+      },
       attachment: (!r.deleted_at && r.att_id) ? { id: r.att_id, kind: r.att_kind, name: r.att_name } : null,
       deleted: !!r.deleted_at,
       canDelete: !r.deleted_at && r.sender_id === req.user.id
@@ -645,7 +795,7 @@ app.post('/api/conversations/:id/messages', requireAuth, requireConversationPart
   ).run(req.conversationId, req.user.id, content ? content.trim() : null, attachmentId || null);
 
   const row = db.prepare(`
-    SELECT m.*, u.name as sender_name, u.role as sender_role,
+    SELECT m.*, u.name as sender_name, u.role as sender_role, u.avatar_filename as sender_avatar,
            a.id as att_id, a.kind as att_kind, a.original_name as att_name
     FROM dm_messages m
     JOIN users u ON u.id = m.sender_id
@@ -658,7 +808,10 @@ app.post('/api/conversations/:id/messages', requireAuth, requireConversationPart
     conversationId: req.conversationId,
     content: row.content,
     createdAt: row.created_at,
-    user: { id: row.sender_id, name: row.sender_name, role: row.sender_role, roleLabel: ROLE_LABELS[row.sender_role] },
+    user: {
+      id: row.sender_id, name: row.sender_name, role: row.sender_role, roleLabel: ROLE_LABELS[row.sender_role],
+      avatarUrl: row.sender_avatar ? `/api/avatar/${row.sender_id}` : null
+    },
     attachment: row.att_id ? { id: row.att_id, kind: row.att_kind, name: row.att_name } : null,
     deleted: false,
     canDelete: true
@@ -736,15 +889,37 @@ app.delete('/api/cardapio/:id', requireAuth, requireRole(...CARDAPIO_ROLES), (re
 // Financeiro (prestacao de contas simples)
 // ---------------------------------------------------------------------------
 app.get('/api/financeiro', requireAuth, (req, res) => {
-  const rows = db.prepare(`
-    SELECT f.*, u.name as author_name FROM financeiro f JOIN users u ON u.id = f.created_by
-    ORDER BY f.date DESC, f.id DESC
-  `).all();
+  const month = req.query.month; // formato YYYY-MM, opcional
+  const rows = month
+    ? db.prepare(`
+        SELECT f.*, u.name as author_name FROM financeiro f JOIN users u ON u.id = f.created_by
+        WHERE substr(f.date, 1, 7) = ?
+        ORDER BY f.date DESC, f.id DESC
+      `).all(month)
+    : db.prepare(`
+        SELECT f.*, u.name as author_name FROM financeiro f JOIN users u ON u.id = f.created_by
+        ORDER BY f.date DESC, f.id DESC
+      `).all();
   const totals = rows.reduce((acc, r) => {
     if (r.type === 'receita') acc.receitas += r.amount; else acc.despesas += r.amount;
     return acc;
   }, { receitas: 0, despesas: 0 });
   res.json({ lancamentos: rows, totals: { ...totals, saldo: totals.receitas - totals.despesas } });
+});
+
+// Resumo por mes (para o relatorio mensal): totais de receita/despesa/saldo de cada mes com lancamento
+app.get('/api/financeiro/resumo-mensal', requireAuth, (req, res) => {
+  const rows = db.prepare(`
+    SELECT substr(date, 1, 7) as month,
+      SUM(CASE WHEN type = 'receita' THEN amount ELSE 0 END) as receitas,
+      SUM(CASE WHEN type = 'despesa' THEN amount ELSE 0 END) as despesas
+    FROM financeiro
+    GROUP BY month
+    ORDER BY month DESC
+  `).all();
+  res.json({
+    meses: rows.map(r => ({ month: r.month, receitas: r.receitas, despesas: r.despesas, saldo: r.receitas - r.despesas }))
+  });
 });
 
 app.post('/api/financeiro', requireAuth, requireRole(...FIN_MANAGE_ROLES), (req, res) => {

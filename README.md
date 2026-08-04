@@ -4,8 +4,14 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 
 ## Funcionalidades
 
-- **Login com 9 papéis**: Responsável (pai/mãe), Estagiária, Professora Regente, Professora Auxiliar, Cozinha, Diretora, Coordenadora Pedagógica, Secretária e Gestor. Contas de equipe (todas menos Responsável) exigem um "código da equipe" para evitar cadastros indevidos.
-- **Turmas com link de convite**: professoras regentes/auxiliares e a direção criam a turma e recebem um link (`/?invite=CODIGO`). Quem entra pelo link se cadastra/loga como responsável e informa o nome da criança.
+- **Login por número de telefone** (em vez de e-mail) + senha, com 9 papéis: Responsável (pai/mãe), Estagiária, Professora Regente, Professora Auxiliar, Cozinha, Diretora, Coordenadora Pedagógica, Secretária e Gestor. Contas de equipe (todas menos Responsável) exigem um "código da equipe" para evitar cadastros indevidos.
+
+  ⚠️ Não é login por SMS/código de verificação — é telefone como identificador + senha, igual ao e-mail funcionava antes. Se no futuro você quiser verificação por SMS de verdade, é preciso contratar um serviço externo (ex: Twilio) e eu configuro a integração.
+- **Foto de perfil**: cada pessoa pode colocar sua foto clicando no próprio nome/avatar no topo do app. Aparece no chat, nas conversas privadas e na lista "Quem é quem". Sem foto, aparece um círculo colorido com a inicial do nome.
+- **Turmas criadas somente pelo Gestor** — as demais pessoas não veem mais a opção de criar turma. O Gestor gera o link de convite (`/?invite=CODIGO`) para os responsáveis entrarem.
+- **Gerenciar quem está na turma**: o Gestor, a Coordenadora Pedagógica, ou a Professora Regente daquela turma específica podem adicionar uma pessoa já cadastrada diretamente (sem precisar do link) ou remover alguém, pela tela "Quem é quem".
+- **Um responsável pode estar em mais de uma turma** (ex: irmãos em turmas diferentes) — isso já funcionava, sem precisar de nenhuma mudança.
+- **Gestor tem acesso total**: enxerga e pode entrar em qualquer turma da creche mesmo sem ter sido adicionado nela, e passa em qualquer checagem de permissão do sistema — é o único cargo com esse acesso irrestrito.
 - **Identificação de quem é quem**: dentro de cada turma há uma lista "Quem é quem" mostrando cada participante, seu papel (badge colorido) e, no caso dos responsáveis, o nome da criança.
 - **Chat em tempo real por turma** (Socket.IO): mensagens de texto, com nome, papel e horário de quem enviou.
 - **Fotos e PDFs no chat, sem download fácil**: os arquivos são servidos apenas para membros da turma, sempre "inline" (nunca como anexo/download). Imagens abrem em um visualizador dentro do app; PDFs são renderizados página a página em `<canvas>` via PDF.js, sem usar o leitor nativo do navegador (que teria botão de salvar). O menu de clique-direito é bloqueado nas imagens/PDFs.
@@ -14,8 +20,12 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Mensagens privadas**: responsáveis podem abrir uma conversa 1:1 com as professoras/estagiária da turma do filho e com qualquer pessoa da direção. **Nunca é permitida conversa privada entre dois responsáveis.** A equipe também pode conversar livremente entre si. Suporta foto/PDF igual ao chat da turma (visualização dentro do app, sem download).
 - **Apagar mensagens na turma**: qualquer pessoa pode apagar a própria mensagem; a professora regente e qualquer pessoa da direção também podem apagar mensagens enviadas por outras pessoas no chat da turma (fica registrado "Mensagem removida por Fulana"). Nas conversas privadas, só quem enviou pode apagar a própria mensagem.
 - **Cardápio diário**: cozinha, professoras (regente/auxiliar/estagiária) ou direção registram o que foi oferecido em cada refeição (Café da Manhã, Almoço, Café da Tarde, Lanche Final) por data. Todos podem consultar por dia.
-- **Financeiro simples**: lançamentos de receitas e despesas com saldo calculado automaticamente. Diretora, Gestor e Secretária lançam; qualquer pessoa logada pode visualizar (transparência com as famílias); só Diretora e Gestor podem excluir lançamentos.
+- **Financeiro simples com relatório mensal**: lançamentos de receitas e despesas com saldo calculado automaticamente. Tem um filtro por mês (ex: julho/2026) que mostra os totais só daquele período. Diretora, Gestor e Secretária lançam; qualquer pessoa logada pode visualizar (transparência com as famílias); só Diretora e Gestor podem excluir lançamentos.
 - **Logo da creche** no topo do app e na tela de login — usando a arte original que você enviou (recortada e otimizada para web).
+
+## ⚠️ Sobre esta atualização especificamente
+
+O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas foram adicionadas (foto de perfil, etc). Por isso o banco de dados passou a usar um arquivo novo (`creche_v2.db` em vez de `creche.db`). **Mesmo com o disco persistente configurado, essa atualização específica vai fazer todo mundo precisar se cadastrar de novo uma última vez** — depois disso, com o disco persistente, os dados ficam salvos normalmente nas próximas atualizações (contanto que eu não mude a estrutura das tabelas de novo).
 
 ## Como rodar localmente
 
@@ -28,7 +38,7 @@ npm start
 
 Acesse **http://localhost:3000**.
 
-Na primeira vez, crie uma conta de equipe (ex.: "Diretora") usando o código da equipe padrão:
+Na primeira vez, crie sua conta como **"Gestor"** (é quem cria as turmas agora) usando o código da equipe padrão:
 
 ```
 creche2026
@@ -103,16 +113,20 @@ uploads/
 | Ação | Responsável | Estagiária | Prof. Regente | Prof. Auxiliar | Cozinha | Diretora | Coord. Pedagógica | Secretária | Gestor |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | Entrar em turma pelo link       | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Criar turma / gerar convite     | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| Criar turma / gerar convite     | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Adicionar/remover pessoa de uma turma (sem link) | ❌ | ❌ | ✅ (só nas turmas em que ela está) | ❌ | ❌ | ❌ | ✅ (qualquer turma) | ❌ | ✅ (qualquer turma) |
+| Ver/entrar em qualquer turma mesmo sem ser membro | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Enviar mensagens/fotos/PDF no chat | ✅ | ✅ (se estiver na turma) | ✅ | ✅ | ✅ (se estiver na turma) | ✅ | ✅ | ✅ (se estiver na turma) | ✅ |
 | Publicar cardápio               | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Ver cardápio                    | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Remover item do cardápio de outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
 | Lançar receita/despesa          | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ |
-| Ver financeiro                  | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Ver financeiro (incl. relatório mensal) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Excluir lançamento financeiro   | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
 
-Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi quem criou a turma).
+Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi adicionada por quem gerencia a turma).
+
+**Sobre o Gestor**: além das permissões marcadas acima, o Gestor passa automaticamente em qualquer checagem de permissão do sistema (é o "acesso total" que você pediu) — então mesmo que eu esqueça de marcar um ✅ nessa tabela, o Gestor consegue fazer aquilo mesmo assim. Os outros cargos continuam exatamente com o que está marcado.
 
 ### Regra das mensagens privadas
 

@@ -25,8 +25,8 @@
     <!-- LOGIN -->
     <form id="form-login">
       <div class="field">
-        <label>E-mail</label>
-        <input type="email" id="login-email" required autocomplete="email" />
+        <label>Telefone</label>
+        <input type="tel" id="login-phone" placeholder="(11) 91234-5678" required autocomplete="tel" />
       </div>
       <div class="field">
         <label>Senha</label>
@@ -65,8 +65,8 @@
         <input type="text" id="reg-name" required />
       </div>
       <div class="field">
-        <label>E-mail</label>
-        <input type="email" id="reg-email" required autocomplete="email" />
+        <label>Telefone</label>
+        <input type="tel" id="reg-phone" placeholder="(11) 91234-5678" required autocomplete="tel" />
       </div>
       <div class="field">
         <label>Senha</label>
@@ -94,7 +94,9 @@
     <img class="logo" src="/logo-icon.png" alt="Logo" />
     <div class="brand"><b>CEI Ângela Amin</b><span>CENTRO DE EDUCAÇÃO INFANTIL</span></div>
     <div class="spacer"></div>
-    <div class="user-chip">
+    <div class="user-chip" id="btn-profile" title="Meu perfil / foto">
+      <div class="avatar-fallback" id="user-avatar-fallback"></div>
+      <img class="avatar-img hidden" id="user-avatar-img" />
       <span id="user-name"></span>
       <span id="user-role-badge" class="role-badge"></span>
     </div>
@@ -141,6 +143,10 @@
     <div class="view-header">
       <h2>Financeiro - prestacao de contas</h2>
       <button class="btn hidden" id="btn-new-lancamento">+ Lancamento</button>
+    </div>
+    <div class="date-picker-row">
+      <input type="month" id="fin-month-filter" />
+      <button class="btn ghost" id="btn-fin-clear-month">Todos os meses</button>
     </div>
     <div class="fin-totals">
       <div class="card receitas"><div class="label">Receitas</div><div class="value" id="fin-receitas">R$ 0,00</div></div>

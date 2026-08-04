@@ -47,7 +47,21 @@ button {
 .topbar .brand b { color: var(--gray); font-size: 16px; }
 .topbar .brand span { color: var(--gray-light); font-size: 11px; letter-spacing: .05em; }
 .topbar .spacer { flex: 1; }
-.topbar .user-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--gray); }
+.topbar .user-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--gray); cursor: pointer; padding: 4px 8px; border-radius: 20px; }
+.topbar .user-chip:hover { background: #f6f7f9; }
+
+/* ---------- Avatares ---------- */
+.avatar-img, .avatar-fallback {
+  width: 30px; height: 30px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
+}
+.avatar-fallback {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--red); color: #fff; font-size: 13px; font-weight: 700; text-transform: uppercase;
+}
+.avatar-img.small, .avatar-fallback.small { width: 22px; height: 22px; font-size: 10px; }
+.avatar-upload-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 14px; }
+.avatar-upload-wrap .avatar-img, .avatar-upload-wrap .avatar-fallback { width: 84px; height: 84px; font-size: 28px; }
+
 .role-badge {
   font-size: 11px;
   padding: 2px 8px;
@@ -199,6 +213,7 @@ button {
 .msg { max-width: 78%; }
 .msg.mine { align-self: flex-end; }
 .msg .meta { font-size: 11px; color: var(--gray-light); margin-bottom: 2px; display: flex; gap: 6px; align-items: center; }
+.msg .meta .avatar-img, .msg .meta .avatar-fallback { width: 18px; height: 18px; font-size: 9px; }
 .msg.mine .meta { justify-content: flex-end; }
 .msg .meta .msg-del { background: none; border: none; font-size: 11px; opacity: .5; padding: 0 2px; }
 .msg .meta .msg-del:hover { opacity: 1; }
@@ -215,6 +230,8 @@ button {
 .member-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .member-row .name { font-weight: 600; color: var(--gray); font-size: 14px; }
 .member-row .child { font-size: 12px; color: var(--gray-light); }
+.member-row .spacer { flex: 1; }
+.member-row .remove-member { background: none; border: none; color: var(--red); font-size: 12px; cursor: pointer; padding: 4px 8px; }
 
 /* ---------- Cardapio ---------- */
 .date-picker-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
