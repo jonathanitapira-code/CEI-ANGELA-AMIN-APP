@@ -23,6 +23,7 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Financeiro simples com relatório mensal**: lançamentos de receitas e despesas com saldo calculado automaticamente. Tem um filtro por mês (ex: julho/2026) que mostra os totais só daquele período. Diretora, Gestor e Secretária lançam; qualquer pessoa logada pode visualizar (transparência com as famílias); só Diretora e Gestor podem excluir lançamentos.
 - **Logo da creche** no topo do app e na tela de login — usando a arte original que você enviou (recortada e otimizada para web).
 - **Instalar como aplicativo no celular (PWA)**: o app pode ser adicionado à tela inicial do Android/iPhone e abrir em tela cheia, como um app "de verdade" — sem precisar de loja de aplicativos. Veja a seção "📲 Instalar como aplicativo no celular" abaixo.
+- **Esqueceu a senha? Redefinir senha**: como o login é por telefone (sem e-mail/SMS cadastrado), não existe um link automático de "recuperar senha" por enquanto. Na tela de login há um botão "Esqueceu sua senha?" explicando isso. A redefinição é feita por alguém da Direção (Diretora, Coordenadora Pedagógica, Secretária) ou pelo Gestor, direto no app, na nova aba **"Usuários"**: buscar a pessoa pelo nome/telefone, clicar em "Redefinir senha", definir uma senha temporária e avisar essa pessoa diretamente (telefone, WhatsApp, pessoalmente).
 
 ## 📲 Instalar como aplicativo no celular
 
@@ -137,6 +138,7 @@ uploads/
 | Lançar receita/despesa          | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ |
 | Ver financeiro (incl. relatório mensal) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Excluir lançamento financeiro   | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
+| Redefinir senha de outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 
 Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi adicionada por quem gerencia a turma).
 

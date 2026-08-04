@@ -361,6 +361,35 @@ app.get('/api/me', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// "Esqueci minha senha": como nao ha e-mail nem SMS cadastrados, a
+// redefinicao e feita por alguem da direcao (ou o Gestor) direto no app,
+// em vez de um link automatico por e-mail/SMS.
+// ---------------------------------------------------------------------------
+
+// Lista todos os usuarios cadastrados (nome/telefone/papel), para a tela
+// "Usuarios" de quem pode redefinir senha.
+app.get('/api/admin/users', requireAuth, requireRole(...DIRECAO_ROLES), (req, res) => {
+  const users = db.prepare('SELECT id, name, phone, role FROM users ORDER BY name COLLATE NOCASE').all();
+  res.json({ users: users.map(u => ({ ...u, roleLabel: ROLE_LABELS[u.role] })) });
+});
+
+// Define uma nova senha para outro usuario. A pessoa deve avisar essa senha
+// temporaria diretamente para o dono da conta (por telefone/whatsapp/pessoalmente).
+app.post('/api/admin/users/:id/reset-password', requireAuth, requireRole(...DIRECAO_ROLES), (req, res) => {
+  const targetId = Number(req.params.id);
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ error: 'A nova senha precisa ter pelo menos 6 caracteres' });
+  }
+  const target = db.prepare('SELECT id FROM users WHERE id = ?').get(targetId);
+  if (!target) return res.status(404).json({ error: 'Usuario nao encontrado' });
+
+  const hash = bcrypt.hashSync(newPassword, 10);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, targetId);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
 // Foto de perfil
 // ---------------------------------------------------------------------------
 const uploadAvatar = multer({

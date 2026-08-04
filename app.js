@@ -11,8 +11,9 @@
   const CARDAPIO_ADMIN_ROLES = ['diretora', 'coordenadora_pedagogica', 'gestor'];
   const FIN_MANAGE_ROLES = ['diretora', 'gestor', 'secretaria'];
   const FIN_DELETE_ROLES = ['diretora', 'gestor'];
+  const DIRECAO_ROLES = ['diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
 
-  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro'];
+  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'usuarios'];
 
   const state = {
     user: null,
@@ -161,6 +162,20 @@
     document.getElementById('reg-childname-field').classList.toggle('hidden', role !== 'pai');
   }
   updateRegisterFieldsVisibility();
+
+  document.getElementById('btn-forgot-password').addEventListener('click', () => {
+    openModal(`
+      <h3>Esqueceu sua senha?</h3>
+      <p style="font-size:14px;color:#444;line-height:1.5">
+        Por enquanto a redefinicao nao e automatica. Peca para a <b>Diretora</b>,
+        <b>Coordenadora Pedagogica</b>, <b>Secretaria</b> ou o <b>Gestor</b> da creche
+        redefinir sua senha para voce: eles conseguem fazer isso dentro do app,
+        na aba <b>"Usuarios"</b>, e depois te avisam a senha nova.
+      </p>
+      <div class="modal-actions"><button class="btn" id="close-forgot-pw">Entendi</button></div>
+    `);
+    document.getElementById('close-forgot-pw').addEventListener('click', closeModal);
+  });
 
   formLogin.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -314,6 +329,7 @@
     document.getElementById('btn-new-turma').classList.toggle('hidden', !TURMA_CREATE_ROLES.includes(state.user.role));
     document.getElementById('btn-new-meal').classList.toggle('hidden', !CARDAPIO_ROLES.includes(state.user.role));
     document.getElementById('btn-new-lancamento').classList.toggle('hidden', !FIN_MANAGE_ROLES.includes(state.user.role));
+    document.getElementById('nav-usuarios').classList.toggle('hidden', !DIRECAO_ROLES.includes(state.user.role));
 
     connectSocket();
     setupNav();
@@ -425,6 +441,7 @@
     if (name === 'mensagens') loadConversations();
     if (name === 'cardapio') loadCardapio();
     if (name === 'financeiro') loadFinanceiro();
+    if (name === 'usuarios') loadUsuarios();
   }
 
   function leaveChatSocketIfNeeded() {
@@ -896,6 +913,92 @@
         loadFinanceiro();
       });
       tbody.appendChild(tr);
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Usuarios / redefinir senha (para direcao e gestor)
+  // ------------------------------------------------------------------
+  let usuariosCache = [];
+
+  async function loadUsuarios() {
+    const data = await api('/api/admin/users');
+    usuariosCache = data.users;
+    document.getElementById('usuarios-search').value = '';
+    renderUsuarios(usuariosCache);
+  }
+
+  function renderUsuarios(list) {
+    const box = document.getElementById('usuarios-list');
+    box.innerHTML = '';
+    if (!list.length) {
+      box.innerHTML = '<p style="color:#999;font-size:13px">Nenhum usuario encontrado.</p>';
+      return;
+    }
+    list.forEach(u => {
+      const row = el(`<div class="member-row">
+        ${avatarHtml(u, 'small')}
+        <div>
+          <div class="name">${escapeHtml(u.name)}</div>
+          <div class="phone">${escapeHtml(formatPhoneDisplay(u.phone))}</div>
+        </div>
+        ${roleBadge(u.role, u.roleLabel)}
+        <div class="spacer"></div>
+        <button class="btn secondary" style="padding:5px 10px;font-size:12px" data-reset="${u.id}">Redefinir senha</button>
+      </div>`);
+      row.querySelector('[data-reset]').addEventListener('click', () => openResetPasswordModal(u));
+      box.appendChild(row);
+    });
+  }
+
+  function formatPhoneDisplay(phone) {
+    if (!phone) return '';
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 10) return phone;
+    const ddd = digits.slice(0, 2);
+    const rest = digits.slice(2);
+    return rest.length === 9
+      ? `(${ddd}) ${rest.slice(0, 5)}-${rest.slice(5)}`
+      : `(${ddd}) ${rest.slice(0, 4)}-${rest.slice(4)}`;
+  }
+
+  document.getElementById('usuarios-search').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) return renderUsuarios(usuariosCache);
+    renderUsuarios(usuariosCache.filter(u =>
+      u.name.toLowerCase().includes(q) || (u.phone || '').includes(q.replace(/\D/g, ''))
+    ));
+  });
+
+  function openResetPasswordModal(user) {
+    openModal(`
+      <h3>Redefinir senha</h3>
+      <p style="font-size:13px;color:#666">
+        Definindo uma nova senha para <b>${escapeHtml(user.name)}</b> (${roleBadge(user.role, user.roleLabel)}).
+        Depois de salvar, avise essa senha diretamente para a pessoa.
+      </p>
+      <div class="field"><label>Nova senha</label><input type="password" id="reset-pw" minlength="6" placeholder="Minimo 6 caracteres" /></div>
+      <div class="field"><label>Confirmar nova senha</label><input type="password" id="reset-pw-confirm" minlength="6" /></div>
+      <div class="error-msg" id="reset-pw-error"></div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="cancel-reset-pw">Cancelar</button>
+        <button class="btn" id="confirm-reset-pw">Salvar nova senha</button>
+      </div>
+    `);
+    document.getElementById('cancel-reset-pw').addEventListener('click', closeModal);
+    document.getElementById('confirm-reset-pw').addEventListener('click', async () => {
+      const errBox = document.getElementById('reset-pw-error');
+      const pw = document.getElementById('reset-pw').value;
+      const pwConfirm = document.getElementById('reset-pw-confirm').value;
+      if (pw.length < 6) { errBox.textContent = 'A senha precisa ter pelo menos 6 caracteres'; return; }
+      if (pw !== pwConfirm) { errBox.textContent = 'As senhas nao coincidem'; return; }
+      try {
+        await api('/api/admin/users/' + user.id + '/reset-password', { method: 'POST', body: { newPassword: pw } });
+        closeModal();
+        alert(`Senha de ${user.name} redefinida. Avise a nova senha para essa pessoa.`);
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
     });
   }
 

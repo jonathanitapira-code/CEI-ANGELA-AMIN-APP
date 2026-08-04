@@ -242,6 +242,15 @@ button {
 .member-row .child { font-size: 12px; color: var(--gray-light); }
 .member-row .spacer { flex: 1; }
 .member-row .remove-member { background: none; border: none; color: var(--red); font-size: 12px; cursor: pointer; padding: 4px 8px; }
+.member-row .phone { font-size: 12px; color: var(--gray-light); }
+
+/* ---------- Usuarios / esqueci a senha ---------- */
+.search-input { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-family: inherit; }
+.link-btn {
+  display: block; width: 100%; text-align: center; background: none; border: none;
+  color: var(--red); font-size: 13px; margin-top: 10px; cursor: pointer; padding: 4px;
+}
+.link-btn:hover { text-decoration: underline; }
 
 /* ---------- Cardapio ---------- */
 .date-picker-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }

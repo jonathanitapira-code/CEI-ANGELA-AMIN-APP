@@ -44,6 +44,7 @@
       </div>
       <div class="error-msg" id="login-error"></div>
       <button type="submit" class="btn" style="width:100%">Entrar</button>
+      <button type="button" id="btn-forgot-password" class="link-btn">Esqueceu sua senha?</button>
     </form>
 
     <!-- REGISTER -->
@@ -119,6 +120,7 @@
     <button data-view="mensagens">Mensagens</button>
     <button data-view="cardapio">Cardapio</button>
     <button data-view="financeiro">Financeiro</button>
+    <button data-view="usuarios" id="nav-usuarios" class="hidden">Usuarios</button>
   </div>
 
   <!-- ---------- TURMAS ---------- -->
@@ -170,6 +172,18 @@
         <tbody id="fin-tbody"></tbody>
       </table>
     </div>
+  </div>
+
+  <!-- ---------- USUARIOS (redefinir senha) ---------- -->
+  <div class="view hidden" id="view-usuarios">
+    <div class="view-header">
+      <h2>Usuarios - redefinir senha</h2>
+    </div>
+    <p style="font-size:13px;color:#666;margin:-6px 0 12px">
+      Se alguem esqueceu a senha, encontre o nome abaixo e clique em "Redefinir senha". Depois, avise a nova senha diretamente para essa pessoa (por telefone, WhatsApp ou pessoalmente).
+    </p>
+    <input type="text" id="usuarios-search" class="search-input" placeholder="Buscar por nome ou telefone..." />
+    <div id="usuarios-list"></div>
   </div>
 
   <!-- ---------- CHAT (tela cheia) ---------- -->
