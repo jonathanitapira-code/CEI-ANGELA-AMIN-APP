@@ -424,6 +424,7 @@
       if (state.chat && state.chat.type === 'turma' && msg.turmaId === state.chat.id) {
         appendMessage(msg);
         scrollChatToBottom();
+        markTurmaAsRead(msg.turmaId); // ja esta vendo a mensagem chegar ao vivo
       }
     });
     state.socket.on('message_deleted', (info) => {
@@ -435,12 +436,49 @@
       if (state.chat && state.chat.type === 'conversation' && msg.conversationId === state.chat.id) {
         appendMessage(msg);
         scrollChatToBottom();
+        markConversationAsRead(msg.conversationId);
       }
     });
     state.socket.on('dm_message_deleted', (info) => {
       if (state.chat && state.chat.type === 'conversation' && info.conversationId === state.chat.id) {
         markMessageDeleted(info.id, null);
       }
+    });
+    // Numerinho de nao lidas mudou em alguma turma/conversa que nao esta aberta agora
+    state.socket.on('unread_bump', ({ kind }) => {
+      if (kind === 'turma') loadTurmas().catch(() => {});
+      else if (kind === 'conversation') loadConversations().catch(() => {});
+    });
+    // Alguem leu mensagens da turma que esta aberta na minha tela agora - atualiza "visto por"
+    state.socket.on('turma_read_update', (info) => {
+      if (state.chat && state.chat.type === 'turma' && info.turmaId === state.chat.id) {
+        applyTurmaReadUpdate(info);
+      }
+    });
+    // A outra pessoa da conversa aberta leu as minhas mensagens - atualiza "Visto"
+    state.socket.on('conversation_read_update', (info) => {
+      if (state.chat && state.chat.type === 'conversation' && info.conversationId === state.chat.id) {
+        applyConversationReadUpdate(info);
+      }
+    });
+  }
+
+  function applyTurmaReadUpdate({ userId, userName }) {
+    if (userId === state.user.id) return; // nao precisa mostrar "visto por mim mesmo"
+    document.querySelectorAll('#chat-messages .msg.mine .msg-seen').forEach((seenEl) => {
+      const names = seenEl.dataset.names ? seenEl.dataset.names.split('|') : [];
+      if (!names.includes(userName)) {
+        names.push(userName);
+        seenEl.dataset.names = names.join('|');
+        seenEl.textContent = 'Visto por ' + names.join(', ');
+      }
+    });
+  }
+
+  function applyConversationReadUpdate({ userId }) {
+    if (userId === state.user.id) return;
+    document.querySelectorAll('#chat-messages .msg.mine .msg-seen').forEach((seenEl) => {
+      seenEl.textContent = 'Visto';
     });
   }
 
@@ -487,7 +525,7 @@
     }
     data.turmas.forEach(t => {
       const card = el(`<div class="turma-card">
-        <h3>${escapeHtml(t.name)}</h3>
+        <h3>${escapeHtml(t.name)} ${t.unread_count > 0 ? `<span class="unread-badge">${t.unread_count}</span>` : ''}</h3>
         <p>${t.member_count} participante(s)</p>
       </div>`);
       card.addEventListener('click', () => openChat(t));
@@ -556,6 +594,13 @@
     const data = await api(`/api/turmas/${turma.id}/messages`);
     data.messages.forEach(appendMessage);
     scrollChatToBottom();
+    markTurmaAsRead(turma.id);
+  }
+
+  function markTurmaAsRead(turmaId) {
+    const t = state.turmas.find(x => x.id === turmaId);
+    if (t) t.unread_count = 0;
+    api(`/api/turmas/${turmaId}/read`, { method: 'POST' }).catch(() => {});
   }
 
   document.getElementById('btn-back-turmas').addEventListener('click', () => {
@@ -682,6 +727,20 @@
     }
     wrap.appendChild(meta);
     wrap.appendChild(bubble);
+
+    // "Visto por" / "Visto": so mostra embaixo das minhas proprias mensagens
+    if (mine && !msg.deleted) {
+      const seenEl = document.createElement('div');
+      seenEl.className = 'msg-seen';
+      if (Array.isArray(msg.readBy)) {
+        seenEl.dataset.names = msg.readBy.join('|');
+        seenEl.textContent = msg.readBy.length ? 'Visto por ' + msg.readBy.join(', ') : '';
+      } else if (msg.seenByOther) {
+        seenEl.textContent = 'Visto';
+      }
+      wrap.appendChild(seenEl);
+    }
+
     document.getElementById('chat-messages').appendChild(wrap);
   }
 
@@ -769,7 +828,7 @@
     }
     data.conversations.forEach(c => {
       const card = el(`<div class="turma-card">
-        <h3>${avatarHtml(c.other, 'small')} ${escapeHtml(c.other.name)} ${roleBadge(c.other.role, c.other.roleLabel)}</h3>
+        <h3>${avatarHtml(c.other, 'small')} ${escapeHtml(c.other.name)} ${roleBadge(c.other.role, c.other.roleLabel)} ${c.unread_count > 0 ? `<span class="unread-badge">${c.unread_count}</span>` : ''}</h3>
         <p>${c.lastMessagePreview ? escapeHtml(c.lastMessagePreview) : 'Nenhuma mensagem ainda'}</p>
       </div>`);
       card.addEventListener('click', () => openConversation(c));
@@ -829,6 +888,13 @@
     const data = await api(`/api/conversations/${conv.id}/messages`);
     data.messages.forEach(appendMessage);
     scrollChatToBottom();
+    markConversationAsRead(conv.id);
+  }
+
+  function markConversationAsRead(conversationId) {
+    const c = state.conversations.find(x => x.id === conversationId);
+    if (c) c.unread_count = 0;
+    api(`/api/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => {});
   }
 
   // ------------------------------------------------------------------

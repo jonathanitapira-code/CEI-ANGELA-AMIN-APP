@@ -26,6 +26,7 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Esqueceu a senha? Redefinir senha**: como o login é por telefone (sem e-mail/SMS cadastrado), não existe um link automático de "recuperar senha" por enquanto. Na tela de login há um botão "Esqueceu sua senha?" explicando isso. A redefinição é feita por alguém da Direção (Diretora, Coordenadora Pedagógica, Secretária) ou pelo Gestor, direto no app, na aba **"Usuários"**: buscar a pessoa pelo nome/telefone, clicar em "Redefinir senha", definir uma senha temporária e avisar essa pessoa diretamente (telefone, WhatsApp, pessoalmente).
 - **Corrigir cadastro errado / excluir usuário**: na mesma aba "Usuários", Direção e Gestor também podem clicar em **"Alterar papel"** (útil quando alguém marcou "Responsável" mas na verdade é da equipe, ou vice-versa) ou em **"Excluir"** (a pessoa sai de todas as turmas e não consegue mais entrar no app; o histórico de mensagens/cardápio/financeiro que ela já registrou continua aparecendo normalmente para os outros, e o número de telefone dela fica livre para um cadastro novo). Ninguém consegue alterar/excluir a própria conta por essa tela.
 - **Notificação de mensagem recebida (push)**: cada pessoa pode clicar em "🔔 Notificações" no topo do app para autorizar avisos, mesmo com o app fechado (funciona pra turma e pra conversa privada). Veja a seção "🔔 Notificações push" abaixo — precisa de uma configuração extra no Render pra funcionar.
+- **Mensagens não lidas e "visto por"**: cada turma e cada conversa privada mostra um número vermelho com a quantidade de mensagens não lidas (some assim que a pessoa abre o chat). Em toda mensagem que você mesmo enviou, aparece embaixo quem já viu — na turma mostra os nomes ("Visto por Fulana, Beltrana"), na conversa privada mostra só "Visto" quando a outra pessoa já leu. Atualiza sozinho, sem precisar atualizar a página.
 
 ## 📲 Instalar como aplicativo no celular
 
@@ -62,6 +63,8 @@ O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas fo
 **Sobre a atualização de "excluir/alterar papel de usuário"**: essa aqui adiciona uma coluna nova (`active`) na tabela de usuários, mas de um jeito seguro que **não apaga nem exige recadastro de ninguém** — o próprio código detecta se a coluna já existe e adiciona sem mexer nos dados existentes.
 
 **Sobre a atualização de "notificações push"**: essa aqui só adiciona uma tabela nova (`push_subscriptions`) para guardar quem autorizou notificação — também **não apaga nem exige recadastro de ninguém**. Sem as 3 variáveis de ambiente novas (veja a seção acima), o app funciona normalmente, só sem o botão de notificação funcionando.
+
+**Sobre a atualização de "não lidas e visto por"**: essa aqui adiciona duas tabelas novas (`turma_message_reads`, `conversation_message_reads`) para guardar até onde cada pessoa já leu — também **não apaga nem exige recadastro de ninguém**.
 
 ## Como rodar localmente
 

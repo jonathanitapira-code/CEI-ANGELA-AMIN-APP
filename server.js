@@ -181,6 +181,25 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   auth TEXT NOT NULL,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Ate onde cada pessoa ja leu em cada turma/conversa (guarda so o id da ultima
+-- mensagem lida, nao uma linha por mensagem - mais leve e da pra calcular
+-- "nao lidas" e "visto por" a partir disso, igual WhatsApp faz em grupos)
+CREATE TABLE IF NOT EXISTS turma_message_reads (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  turma_id INTEGER NOT NULL REFERENCES turmas(id),
+  last_read_message_id INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, turma_id)
+);
+
+CREATE TABLE IF NOT EXISTS conversation_message_reads (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+  last_read_message_id INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, conversation_id)
+);
 `);
 
 // Migracao segura para bancos que ja existiam antes da coluna "active" existir:
@@ -255,6 +274,38 @@ function sendPushToUsers(userIds, payload) {
       });
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Mensagens nao lidas / "visto por"
+// ---------------------------------------------------------------------------
+
+// Marca que o usuario leu a turma ate a mensagem mais recente que existe agora.
+// So avanca o ponteiro (nunca volta pra tras, mesmo se chamado fora de ordem).
+function markTurmaRead(turmaId, userId) {
+  const row = db.prepare('SELECT MAX(id) as maxId FROM messages WHERE turma_id = ?').get(turmaId);
+  const maxId = (row && row.maxId) || 0;
+  db.prepare(`
+    INSERT INTO turma_message_reads (user_id, turma_id, last_read_message_id, updated_at)
+    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, turma_id) DO UPDATE SET
+      last_read_message_id = MAX(last_read_message_id, excluded.last_read_message_id),
+      updated_at = CURRENT_TIMESTAMP
+  `).run(userId, turmaId, maxId);
+  return maxId;
+}
+
+function markConversationRead(conversationId, userId) {
+  const row = db.prepare('SELECT MAX(id) as maxId FROM dm_messages WHERE conversation_id = ?').get(conversationId);
+  const maxId = (row && row.maxId) || 0;
+  db.prepare(`
+    INSERT INTO conversation_message_reads (user_id, conversation_id, last_read_message_id, updated_at)
+    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, conversation_id) DO UPDATE SET
+      last_read_message_id = MAX(last_read_message_id, excluded.last_read_message_id),
+      updated_at = CURRENT_TIMESTAMP
+  `).run(userId, conversationId, maxId);
+  return maxId;
 }
 
 const ROLE_LABELS = {
@@ -591,22 +642,42 @@ app.post('/api/turmas', requireAuth, requireRole(...TURMA_CREATE_ROLES), (req, r
   res.json({ turma });
 });
 
+// Subquery reaproveitada nas duas variantes abaixo: quantas mensagens da
+// turma essa pessoa ainda nao leu (nunca conta mensagem que ela mesma enviou).
+const UNREAD_TURMA_SUBQUERY = `(
+  SELECT COUNT(*) FROM messages m
+  WHERE m.turma_id = t.id AND m.user_id != ? AND m.deleted_at IS NULL
+    AND m.id > COALESCE((SELECT last_read_message_id FROM turma_message_reads WHERE user_id = ? AND turma_id = t.id), 0)
+) as unread_count`;
+
 app.get('/api/turmas', requireAuth, (req, res) => {
   // Gestor enxerga todas as turmas da creche (acesso total), mesmo sem ter entrado nelas
   const turmas = req.user.role === 'gestor'
     ? db.prepare(`
-        SELECT t.*, (SELECT COUNT(*) FROM turma_members m WHERE m.turma_id = t.id) as member_count
+        SELECT t.*, (SELECT COUNT(*) FROM turma_members m WHERE m.turma_id = t.id) as member_count,
+          ${UNREAD_TURMA_SUBQUERY}
         FROM turmas t
         ORDER BY t.created_at DESC
-      `).all()
+      `).all(req.user.id, req.user.id)
     : db.prepare(`
-        SELECT t.*, (SELECT COUNT(*) FROM turma_members m WHERE m.turma_id = t.id) as member_count
+        SELECT t.*, (SELECT COUNT(*) FROM turma_members m WHERE m.turma_id = t.id) as member_count,
+          ${UNREAD_TURMA_SUBQUERY}
         FROM turmas t
         JOIN turma_members tm ON tm.turma_id = t.id
         WHERE tm.user_id = ?
         ORDER BY t.created_at DESC
-      `).all(req.user.id);
+      `).all(req.user.id, req.user.id, req.user.id);
   res.json({ turmas });
+});
+
+// Marca a turma como lida ate a mensagem mais recente (chamado ao abrir o chat
+// e quando uma mensagem nova chega enquanto o chat ja esta aberto na tela).
+app.post('/api/turmas/:id/read', requireAuth, requireTurmaMember, (req, res) => {
+  const lastReadMessageId = markTurmaRead(req.turmaId, req.user.id);
+  io.to('turma_' + req.turmaId).emit('turma_read_update', {
+    turmaId: req.turmaId, userId: req.user.id, userName: req.user.name, lastReadMessageId
+  });
+  res.json({ ok: true, lastReadMessageId });
 });
 
 // Preview publico do convite (sem exigir login) - so mostra o nome da turma
@@ -760,6 +831,17 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
       .all(req.turmaId, limit);
   }
   rows.reverse();
+
+  // Quem ja leu ate onde, nessa turma (usado pra calcular "visto por" de cada
+  // mensagem sem precisar de uma linha por mensagem lida).
+  const readsForTurma = db.prepare(`
+    SELECT tm.user_id, u.name, COALESCE(r.last_read_message_id, 0) as last_read_message_id
+    FROM turma_members tm
+    JOIN users u ON u.id = tm.user_id
+    LEFT JOIN turma_message_reads r ON r.user_id = tm.user_id AND r.turma_id = tm.turma_id
+    WHERE tm.turma_id = ?
+  `).all(req.turmaId);
+
   res.json({
     messages: rows.map(r => ({
       id: r.id,
@@ -772,7 +854,10 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
       attachment: (!r.deleted_at && r.att_id) ? { id: r.att_id, kind: r.att_kind, name: r.att_name } : null,
       deleted: !!r.deleted_at,
       deletedByName: r.deleted_by_name || null,
-      canDelete: !r.deleted_at && (r.user_id === req.user.id || MODERACAO_TURMA_ROLES.includes(req.user.role))
+      canDelete: !r.deleted_at && (r.user_id === req.user.id || MODERACAO_TURMA_ROLES.includes(req.user.role)),
+      readBy: readsForTurma
+        .filter(mr => mr.user_id !== r.user_id && mr.last_read_message_id >= r.id)
+        .map(mr => mr.name)
     }))
   });
 });
@@ -813,7 +898,8 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
     attachment: row.att_id ? { id: row.att_id, kind: row.att_kind, name: row.att_name } : null,
     deleted: false,
     deletedByName: null,
-    canDelete: true
+    canDelete: true,
+    readBy: []
   };
 
   io.to('turma_' + req.turmaId).emit('new_message', payload);
@@ -829,6 +915,12 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
     body: row.content ? `${row.user_name}: ${row.content}` : `${row.user_name} enviou ${row.att_kind === 'pdf' ? 'um PDF' : 'uma foto'}`,
     url: `/?openTurma=${req.turmaId}`
   });
+  // Avisa (na sala pessoal) quem nao esta vendo esse chat agora pra atualizar
+  // o numerinho de nao lidas na lista de turmas, sem precisar recarregar.
+  notifyIds.forEach((uid) => io.to('user_' + uid).emit('unread_bump', { kind: 'turma', id: req.turmaId }));
+
+  // Quem enviou tambem "leu" ate a propria mensagem (mantem o ponteiro em dia).
+  markTurmaRead(req.turmaId, req.user.id);
 
   res.json({ message: payload });
 });
@@ -879,11 +971,16 @@ app.get('/api/conversations', requireAuth, (req, res) => {
       (SELECT content FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_content,
       (SELECT created_at FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_at,
       (SELECT deleted_at FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_deleted_at,
-      (SELECT attachment_id FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_attachment_id
+      (SELECT attachment_id FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_attachment_id,
+      (
+        SELECT COUNT(*) FROM dm_messages m
+        WHERE m.conversation_id = c.id AND m.sender_id != ? AND m.deleted_at IS NULL
+          AND m.id > COALESCE((SELECT last_read_message_id FROM conversation_message_reads WHERE user_id = ? AND conversation_id = c.id), 0)
+      ) as unread_count
     FROM conversations c
     WHERE c.user_a_id = ? OR c.user_b_id = ?
     ORDER BY COALESCE(last_at, c.created_at) DESC
-  `).all(req.user.id, req.user.id, req.user.id);
+  `).all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id);
 
   const conversations = rows.map(r => {
     const other = db.prepare('SELECT id, name, role, avatar_filename FROM users WHERE id = ?').get(r.other_id);
@@ -898,10 +995,20 @@ app.get('/api/conversations', requireAuth, (req, res) => {
         avatarUrl: other.avatar_filename ? `/api/avatar/${other.id}` : null
       },
       lastMessagePreview: preview,
-      lastMessageAt: r.last_at || r.created_at
+      lastMessageAt: r.last_at || r.created_at,
+      unread_count: r.unread_count
     };
   });
   res.json({ conversations });
+});
+
+// Marca a conversa como lida ate a mensagem mais recente.
+app.post('/api/conversations/:id/read', requireAuth, requireConversationParticipant, (req, res) => {
+  const lastReadMessageId = markConversationRead(req.conversationId, req.user.id);
+  io.to('conv_' + req.conversationId).emit('conversation_read_update', {
+    conversationId: req.conversationId, userId: req.user.id, lastReadMessageId
+  });
+  res.json({ ok: true, lastReadMessageId });
 });
 
 app.post('/api/conversations', requireAuth, (req, res) => {
@@ -941,6 +1048,17 @@ app.get('/api/conversations/:id/messages', requireAuth, requireConversationParti
     LIMIT 200
   `).all(req.conversationId);
 
+  // Ate onde a outra pessoa da conversa ja leu, pra marcar "visto" nas minhas
+  // proprias mensagens.
+  const convRowForRead = db.prepare('SELECT * FROM conversations WHERE id = ?').get(req.conversationId);
+  const otherIdForRead = convRowForRead
+    ? (convRowForRead.user_a_id === req.user.id ? convRowForRead.user_b_id : convRowForRead.user_a_id)
+    : null;
+  const otherReadRow = otherIdForRead
+    ? db.prepare('SELECT last_read_message_id FROM conversation_message_reads WHERE user_id = ? AND conversation_id = ?').get(otherIdForRead, req.conversationId)
+    : null;
+  const otherLastReadId = otherReadRow ? otherReadRow.last_read_message_id : 0;
+
   res.json({
     messages: rows.map(r => ({
       id: r.id,
@@ -952,7 +1070,8 @@ app.get('/api/conversations/:id/messages', requireAuth, requireConversationParti
       },
       attachment: (!r.deleted_at && r.att_id) ? { id: r.att_id, kind: r.att_kind, name: r.att_name } : null,
       deleted: !!r.deleted_at,
-      canDelete: !r.deleted_at && r.sender_id === req.user.id
+      canDelete: !r.deleted_at && r.sender_id === req.user.id,
+      seenByOther: r.sender_id === req.user.id && r.id <= otherLastReadId
     }))
   });
 });
@@ -1002,7 +1121,8 @@ app.post('/api/conversations/:id/messages', requireAuth, requireConversationPart
     },
     attachment: row.att_id ? { id: row.att_id, kind: row.att_kind, name: row.att_name } : null,
     deleted: false,
-    canDelete: true
+    canDelete: true,
+    seenByOther: false
   };
 
   io.to('conv_' + req.conversationId).emit('new_dm_message', payload);
@@ -1019,8 +1139,10 @@ app.post('/api/conversations/:id/messages', requireAuth, requireConversationPart
         body: row.content ? row.content : `Enviou ${row.att_kind === 'pdf' ? 'um PDF' : 'uma foto'}`,
         url: `/?openConversation=${req.conversationId}`
       });
+      io.to('user_' + otherId).emit('unread_bump', { kind: 'conversation', id: req.conversationId });
     }
   }
+  markConversationRead(req.conversationId, req.user.id);
 
   res.json({ message: payload });
 });
@@ -1156,6 +1278,11 @@ io.on('connection', (socket) => {
     socket.disconnect(true);
     return;
   }
+
+  // Sala pessoal (sempre conectada, independente de qual chat esta aberto) -
+  // usada so pra avisar "tem mensagem nova" e atualizar os numerinhos de nao
+  // lidas nas listas, sem precisar que a pessoa esteja com aquele chat aberto.
+  socket.join('user_' + sess.userId);
 
   socket.on('join_turma', (turmaId) => {
     if (isTurmaMember(Number(turmaId), sess.userId)) {
