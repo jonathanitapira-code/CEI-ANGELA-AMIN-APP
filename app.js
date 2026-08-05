@@ -12,8 +12,9 @@
   const FIN_MANAGE_ROLES = ['diretora', 'gestor', 'secretaria'];
   const FIN_DELETE_ROLES = ['diretora', 'gestor'];
   const DIRECAO_ROLES = ['diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
+  const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica', 'gestor'];
 
-  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'usuarios'];
+  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios'];
 
   const state = {
     user: null,
@@ -22,7 +23,8 @@
     chat: null, // { type: 'turma'|'conversation', id, name, roleBadgeHtml }
     socket: null,
     inviteCode: null,
-    inviteTurmaName: null
+    inviteTurmaName: null,
+    calMonth: new Date() // mes atualmente exibido no calendario (dia nao importa)
   };
 
   // ------------------------------------------------------------------
@@ -329,6 +331,7 @@
     document.getElementById('btn-new-turma').classList.toggle('hidden', !TURMA_CREATE_ROLES.includes(state.user.role));
     document.getElementById('btn-new-meal').classList.toggle('hidden', !CARDAPIO_ROLES.includes(state.user.role));
     document.getElementById('btn-new-lancamento').classList.toggle('hidden', !FIN_MANAGE_ROLES.includes(state.user.role));
+    document.getElementById('btn-new-evento').classList.toggle('hidden', !CALENDARIO_EDIT_ROLES.includes(state.user.role));
     document.getElementById('nav-usuarios').classList.toggle('hidden', !DIRECAO_ROLES.includes(state.user.role));
 
     connectSocket();
@@ -500,6 +503,7 @@
     if (name === 'mensagens') loadConversations();
     if (name === 'cardapio') loadCardapio();
     if (name === 'financeiro') loadFinanceiro();
+    if (name === 'calendario') loadCalendario();
     if (name === 'usuarios') loadUsuarios();
   }
 
@@ -626,7 +630,7 @@
         ${data.canManage && m.id !== state.user.id ? `<button class="remove-member" data-remove-user="${m.id}">remover</button>` : ''}
       </div>`).join('');
     const modal = openModal(`
-      <h3>Quem e quem</h3>
+      <h3>Participantes</h3>
       <div>${rows || '<p>Nenhum participante ainda.</p>'}</div>
       <div class="modal-actions">
         ${data.canManage ? '<button class="btn secondary" id="btn-add-member">+ Adicionar pessoa</button>' : ''}
@@ -845,31 +849,48 @@
       alert('Erro ao carregar contatos: ' + err.message);
       return;
     }
-    const rows = contacts.map(c => `
+    function contactRowHtml(c) {
+      return `
       <div class="member-row contact-row" data-user-id="${c.id}" style="cursor:pointer">
         ${avatarHtml(c)}
         ${roleBadge(c.role, c.roleLabel)}
         <div><div class="name">${escapeHtml(c.name)}</div></div>
-      </div>`).join('');
+      </div>`;
+    }
     const modal = openModal(`
       <h3>Nova conversa</h3>
       <p style="font-size:13px;color:#666">Responsaveis so podem falar com a equipe (nunca com outros responsaveis).</p>
-      <div>${rows || '<p>Nenhum contato disponivel no momento.</p>'}</div>
+      <input type="text" id="contact-search" class="search-input" placeholder="Buscar por nome..." style="margin-bottom:10px" />
+      <div id="contact-rows">${contacts.map(contactRowHtml).join('') || '<p>Nenhum contato disponivel no momento.</p>'}</div>
       <div class="modal-actions"><button class="btn secondary" id="cancel-conversa">Fechar</button></div>
     `);
-    modal.querySelectorAll('.contact-row').forEach(row => {
-      row.addEventListener('click', async () => {
-        const userId = Number(row.dataset.userId);
-        try {
-          const data = await api('/api/conversations', { method: 'POST', body: { userId } });
-          closeModal();
-          await loadConversations();
-          openConversation(data.conversation);
-        } catch (err) {
-          alert('Erro ao iniciar conversa: ' + err.message);
-        }
+    function wireContactRows() {
+      modal.querySelectorAll('.contact-row').forEach(row => {
+        row.addEventListener('click', async () => {
+          const userId = Number(row.dataset.userId);
+          try {
+            const data = await api('/api/conversations', { method: 'POST', body: { userId } });
+            closeModal();
+            await loadConversations();
+            openConversation(data.conversation);
+          } catch (err) {
+            alert('Erro ao iniciar conversa: ' + err.message);
+          }
+        });
       });
-    });
+    }
+    wireContactRows();
+    const searchInput = document.getElementById('contact-search');
+    if (searchInput) {
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.trim().toLowerCase();
+        const filtered = q ? contacts.filter(c => c.name.toLowerCase().includes(q)) : contacts;
+        document.getElementById('contact-rows').innerHTML =
+          filtered.map(contactRowHtml).join('') || '<p>Nenhum contato encontrado.</p>';
+        wireContactRows();
+      });
+      searchInput.focus();
+    }
     document.getElementById('cancel-conversa').addEventListener('click', closeModal);
   });
 
@@ -1204,6 +1225,192 @@
       }
     });
   });
+
+  // ------------------------------------------------------------------
+  // Calendario escolar
+  // ------------------------------------------------------------------
+  const MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  const WEEKDAY_ABBR = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+  // Calcula a data da Pascoa (algoritmo de Meeus/Jones/Butcher) - a partir
+  // dela da pra calcular Carnaval, Sexta-feira Santa e Corpus Christi, que
+  // mudam de data todo ano.
+  function computeEaster(year) {
+    const a = year % 19;
+    const b = Math.floor(year / 100);
+    const c = year % 100;
+    const d = Math.floor(b / 4);
+    const e = b % 4;
+    const f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4);
+    const k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const month = Math.floor((h + l - 7 * m + 114) / 31);
+    const day = ((h + l - 7 * m + 114) % 31) + 1;
+    return new Date(year, month - 1, day);
+  }
+
+  function addDays(date, days) {
+    const d = new Date(date);
+    d.setDate(d.getDate() + days);
+    return d;
+  }
+
+  function ymd(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
+  // Feriados nacionais do Brasil + o feriado municipal de Imbituba/SC
+  // (Nossa Senhora da Conceicao, padroeira da cidade, 8 de dezembro).
+  function getBrazilianHolidays(year) {
+    const easter = computeEaster(year);
+    const map = {};
+    map[`${year}-01-01`] = 'Confraternização Universal';
+    map[ymd(addDays(easter, -48))] = 'Carnaval';
+    map[ymd(addDays(easter, -47))] = 'Carnaval';
+    map[ymd(addDays(easter, -2))] = 'Sexta-feira Santa';
+    map[`${year}-04-21`] = 'Tiradentes';
+    map[`${year}-05-01`] = 'Dia do Trabalho';
+    map[ymd(addDays(easter, 60))] = 'Corpus Christi';
+    map[`${year}-09-07`] = 'Independência do Brasil';
+    map[`${year}-10-12`] = 'Nossa Senhora Aparecida';
+    map[`${year}-11-02`] = 'Finados';
+    map[`${year}-11-15`] = 'Proclamação da República';
+    map[`${year}-11-20`] = 'Dia da Consciência Negra';
+    map[`${year}-12-08`] = 'Nossa Sra. da Conceição - padroeira de Imbituba';
+    map[`${year}-12-25`] = 'Natal';
+    return map;
+  }
+
+  async function loadCalendario() {
+    const y = state.calMonth.getFullYear();
+    const m = String(state.calMonth.getMonth() + 1).padStart(2, '0');
+    document.getElementById('cal-month-label').textContent = `${MONTH_NAMES[state.calMonth.getMonth()]} de ${y}`;
+    let events = [];
+    try {
+      const data = await api(`/api/calendario?month=${y}-${m}`);
+      events = data.events;
+    } catch (err) { /* mostra o mes vazio se der erro */ }
+    renderCalendarGrid(state.calMonth.getFullYear(), state.calMonth.getMonth(), events);
+  }
+
+  function renderCalendarGrid(year, monthIndex, events) {
+    const grid = document.getElementById('cal-grid');
+    grid.innerHTML = '';
+    const holidays = Object.assign({}, getBrazilianHolidays(year), getBrazilianHolidays(year + 1), getBrazilianHolidays(year - 1));
+
+    const eventsByDay = {};
+    events.forEach(e => {
+      (eventsByDay[e.date] = eventsByDay[e.date] || []).push(e);
+    });
+
+    const firstOfMonth = new Date(year, monthIndex, 1);
+    const startWeekday = firstOfMonth.getDay(); // 0=domingo
+    const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+    const todayStr2 = todayStr();
+
+    for (let i = 0; i < startWeekday; i++) {
+      grid.appendChild(el('<div class="cal-day other-month"></div>'));
+    }
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = new Date(year, monthIndex, day);
+      const dateStr = ymd(date);
+      const weekday = date.getDay();
+      const isWeekend = weekday === 0 || weekday === 6;
+      const holidayName = holidays[dateStr];
+      const dayEvents = eventsByDay[dateStr] || [];
+
+      const cell = el(`<div class="cal-day${isWeekend ? ' weekend' : ''}${holidayName ? ' holiday' : ''}${dateStr === todayStr2 ? ' today' : ''}"></div>`);
+      cell.appendChild(el(`<div class="cal-day-num">${day}</div>`));
+      if (holidayName) {
+        cell.appendChild(el(`<div class="cal-holiday-label" title="${escapeHtml(holidayName)}">${escapeHtml(holidayName)}</div>`));
+      }
+      dayEvents.forEach(ev => {
+        const chip = el(`<div class="cal-event-chip" title="${escapeHtml(ev.title)}">${escapeHtml(ev.title)}</div>`);
+        chip.addEventListener('click', (e) => { e.stopPropagation(); openEventoModal(ev); });
+        cell.appendChild(chip);
+      });
+      if (CALENDARIO_EDIT_ROLES.includes(state.user.role)) {
+        cell.style.cursor = 'pointer';
+        cell.addEventListener('click', () => openEventoModal(null, dateStr));
+      }
+      grid.appendChild(cell);
+    }
+  }
+
+  document.getElementById('cal-prev').addEventListener('click', () => {
+    state.calMonth = new Date(state.calMonth.getFullYear(), state.calMonth.getMonth() - 1, 1);
+    loadCalendario();
+  });
+  document.getElementById('cal-next').addEventListener('click', () => {
+    state.calMonth = new Date(state.calMonth.getFullYear(), state.calMonth.getMonth() + 1, 1);
+    loadCalendario();
+  });
+  document.getElementById('btn-new-evento').addEventListener('click', () => openEventoModal(null, todayStr()));
+
+  // ev = evento existente (editar) ou null (criar novo); defaultDate usado so na criacao
+  function openEventoModal(ev, defaultDate) {
+    const canEdit = CALENDARIO_EDIT_ROLES.includes(state.user.role);
+    if (ev && !canEdit) {
+      openModal(`
+        <h3>${escapeHtml(ev.title)}</h3>
+        <p style="font-size:13px;color:#666">${ev.date.split('-').reverse().join('/')}</p>
+        ${ev.description ? `<p style="font-size:14px;white-space:pre-wrap">${escapeHtml(ev.description)}</p>` : ''}
+        <p style="font-size:12px;color:#999">Adicionado por ${escapeHtml(ev.authorName)}</p>
+        <div class="modal-actions"><button class="btn" id="close-evento">Fechar</button></div>
+      `);
+      document.getElementById('close-evento').addEventListener('click', closeModal);
+      return;
+    }
+    openModal(`
+      <h3>${ev ? 'Editar evento' : 'Novo evento'}</h3>
+      <div class="field"><label>Data</label><input type="date" id="evento-date" value="${ev ? ev.date : defaultDate}" /></div>
+      <div class="field"><label>Título</label><input id="evento-title" placeholder="Ex: Reunião de pais, Festa da família, Arraiá cultural..." value="${ev ? escapeHtml(ev.title) : ''}" /></div>
+      <div class="field"><label>Descrição (opcional)</label><textarea id="evento-desc" rows="3">${ev ? escapeHtml(ev.description || '') : ''}</textarea></div>
+      <div class="error-msg" id="evento-error"></div>
+      <div class="modal-actions">
+        ${ev ? '<button class="btn ghost" id="delete-evento" style="color:var(--red)">Excluir</button>' : ''}
+        <button class="btn secondary" id="cancel-evento">Cancelar</button>
+        <button class="btn" id="confirm-evento">Salvar</button>
+      </div>
+    `);
+    document.getElementById('cancel-evento').addEventListener('click', closeModal);
+    const delBtn = document.getElementById('delete-evento');
+    if (delBtn) delBtn.addEventListener('click', async () => {
+      if (!confirm('Excluir este evento do calendário?')) return;
+      try {
+        await api('/api/calendario/' + ev.id, { method: 'DELETE' });
+        closeModal();
+        loadCalendario();
+      } catch (err) {
+        document.getElementById('evento-error').textContent = err.message;
+      }
+    });
+    document.getElementById('confirm-evento').addEventListener('click', async () => {
+      const errBox = document.getElementById('evento-error');
+      const body = {
+        date: document.getElementById('evento-date').value,
+        title: document.getElementById('evento-title').value.trim(),
+        description: document.getElementById('evento-desc').value.trim()
+      };
+      if (!body.title) { errBox.textContent = 'Informe um título para o evento'; return; }
+      try {
+        if (ev) {
+          await api('/api/calendario/' + ev.id, { method: 'PUT', body });
+        } else {
+          await api('/api/calendario', { method: 'POST', body });
+        }
+        closeModal();
+        loadCalendario();
+      } catch (err) {
+        errBox.textContent = err.message;
+      }
+    });
+  }
 
   // ------------------------------------------------------------------
   // PWA: registrar service worker + botao "Instalar app"

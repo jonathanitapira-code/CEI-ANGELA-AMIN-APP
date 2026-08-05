@@ -27,6 +27,9 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Corrigir cadastro errado / excluir usuário**: na mesma aba "Usuários", Direção e Gestor também podem clicar em **"Alterar papel"** (útil quando alguém marcou "Responsável" mas na verdade é da equipe, ou vice-versa) ou em **"Excluir"** (a pessoa sai de todas as turmas e não consegue mais entrar no app; o histórico de mensagens/cardápio/financeiro que ela já registrou continua aparecendo normalmente para os outros, e o número de telefone dela fica livre para um cadastro novo). Ninguém consegue alterar/excluir a própria conta por essa tela.
 - **Notificação de mensagem recebida (push)**: cada pessoa pode clicar em "🔔 Notificações" no topo do app para autorizar avisos, mesmo com o app fechado (funciona pra turma e pra conversa privada). Veja a seção "🔔 Notificações push" abaixo — precisa de uma configuração extra no Render pra funcionar.
 - **Mensagens não lidas e "visto por"**: cada turma e cada conversa privada mostra um número vermelho com a quantidade de mensagens não lidas (some assim que a pessoa abre o chat). Em toda mensagem que você mesmo enviou, aparece embaixo quem já viu — na turma mostra os nomes ("Visto por Fulana, Beltrana"), na conversa privada mostra só "Visto" quando a outra pessoa já leu. Atualiza sozinho, sem precisar atualizar a página.
+- **Busca na tela de "Nova conversa"**: ao abrir uma conversa privada nova, dá pra digitar o nome da pessoa para filtrar a lista de contatos, em vez de rolar tudo.
+- **Botão "Participantes"**: dentro do chat da turma, o antigo botão "Quem é quem" agora se chama "Participantes" (mesma função: ver quem está na turma e, se você tiver permissão, adicionar/remover pessoas).
+- **Calendário escolar**: nova aba "Calendário" com uma visão de mês. Fins de semana e feriados nacionais (Carnaval, Sexta-feira Santa, Tiradentes, Corpus Christi, Independência, etc.) aparecem destacados automaticamente, calculados certinho ano a ano — inclusive o feriado municipal de **8 de dezembro** (Nossa Senhora da Conceição, padroeira de Imbituba). Diretora, Secretária e Estagiária/Professoras só visualizam; **somente Gestor e Coordenadora Pedagógica podem adicionar, editar ou excluir eventos** (reunião de pais, festa da família, arraiá cultural, entrega de portfólios etc.) clicando em qualquer dia do calendário.
 
 ## 📲 Instalar como aplicativo no celular
 
@@ -65,6 +68,8 @@ O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas fo
 **Sobre a atualização de "notificações push"**: essa aqui só adiciona uma tabela nova (`push_subscriptions`) para guardar quem autorizou notificação — também **não apaga nem exige recadastro de ninguém**. Sem as 3 variáveis de ambiente novas (veja a seção acima), o app funciona normalmente, só sem o botão de notificação funcionando.
 
 **Sobre a atualização de "não lidas e visto por"**: essa aqui adiciona duas tabelas novas (`turma_message_reads`, `conversation_message_reads`) para guardar até onde cada pessoa já leu — também **não apaga nem exige recadastro de ninguém**.
+
+**Sobre a atualização do calendário escolar**: adiciona uma tabela nova (`calendar_events`) — também **não apaga nem exige recadastro de ninguém**.
 
 ## Como rodar localmente
 
@@ -167,6 +172,7 @@ uploads/
 | Excluir lançamento financeiro   | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
 | Redefinir senha de outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Alterar papel / excluir outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Adicionar/editar/excluir evento no calendário | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ |
 
 Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi adicionada por quem gerencia a turma).
 

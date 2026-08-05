@@ -121,6 +121,7 @@
     <button data-view="mensagens">Mensagens</button>
     <button data-view="cardapio">Cardapio</button>
     <button data-view="financeiro">Financeiro</button>
+    <button data-view="calendario">Calendário</button>
     <button data-view="usuarios" id="nav-usuarios" class="hidden">Usuarios</button>
   </div>
 
@@ -175,6 +176,28 @@
     </div>
   </div>
 
+  <!-- ---------- CALENDARIO ESCOLAR ---------- -->
+  <div class="view hidden" id="view-calendario">
+    <div class="view-header">
+      <h2>Calendário escolar</h2>
+      <button class="btn hidden" id="btn-new-evento">+ Adicionar evento</button>
+    </div>
+    <div class="cal-nav">
+      <button class="btn ghost" id="cal-prev">&larr;</button>
+      <h3 id="cal-month-label"></h3>
+      <button class="btn ghost" id="cal-next">&rarr;</button>
+    </div>
+    <div class="cal-weekdays">
+      <span>Dom</span><span>Seg</span><span>Ter</span><span>Qua</span><span>Qui</span><span>Sex</span><span>Sáb</span>
+    </div>
+    <div class="cal-grid" id="cal-grid"></div>
+    <div class="cal-legend">
+      <span><i class="cal-dot weekend"></i> Fim de semana</span>
+      <span><i class="cal-dot holiday"></i> Feriado</span>
+      <span><i class="cal-dot event"></i> Evento da creche</span>
+    </div>
+  </div>
+
   <!-- ---------- USUARIOS (redefinir senha) ---------- -->
   <div class="view hidden" id="view-usuarios">
     <div class="view-header">
@@ -194,7 +217,7 @@
         <button class="btn ghost" id="btn-back-turmas">&larr;</button>
         <h3 id="chat-turma-name"></h3>
         <button class="btn secondary" id="btn-invite">Convite</button>
-        <button class="btn secondary" id="btn-members">Quem e quem</button>
+        <button class="btn secondary" id="btn-members">Participantes</button>
       </div>
       <div class="chat-messages" id="chat-messages"></div>
       <div class="chat-input-bar">

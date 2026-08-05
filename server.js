@@ -200,6 +200,18 @@ CREATE TABLE IF NOT EXISTS conversation_message_reads (
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id, conversation_id)
 );
+
+-- Eventos do calendario escolar (reuniao de pais, festa da familia, arraia
+-- cultural, entrega de portfolios etc). Feriados nacionais e fins de semana
+-- NAO ficam aqui - sao calculados na hora, sem precisar guardar no banco.
+CREATE TABLE IF NOT EXISTS calendar_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 // Migracao segura para bancos que ja existiam antes da coluna "active" existir:
@@ -337,6 +349,10 @@ const FIN_DELETE_ROLES = ['diretora', 'gestor'];
 const DIRECAO_ROLES = ['diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
 // Quem pode apagar mensagem de outra pessoa dentro do chat da turma
 const MODERACAO_TURMA_ROLES = ['professora_regente', ...DIRECAO_ROLES];
+// Quem pode editar o calendario escolar (criar/editar/excluir evento). O
+// Gestor sempre passa em qualquer checagem (requireRole ja garante isso
+// automaticamente), entao so precisa listar aqui quem MAIS, alem dele, pode.
+const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica'];
 
 function publicUser(u) {
   if (!u) return null;
@@ -1208,6 +1224,71 @@ app.delete('/api/cardapio/:id', requireAuth, requireRole(...CARDAPIO_ROLES), (re
     return res.status(403).json({ error: 'Somente quem criou ou a direcao/coordenacao pode remover' });
   }
   db.prepare('DELETE FROM cardapio WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Calendario escolar (feriados/fins de semana sao calculados no navegador;
+// aqui so ficam os eventos que a creche cadastra, tipo reuniao de pais)
+// ---------------------------------------------------------------------------
+
+// Todo mundo logado pode ver. Filtra por mes (?month=YYYY-MM) ou devolve tudo.
+app.get('/api/calendario', requireAuth, (req, res) => {
+  const month = req.query.month;
+  const rows = month
+    ? db.prepare(`
+        SELECT e.*, u.name as author_name FROM calendar_events e
+        JOIN users u ON u.id = e.created_by
+        WHERE e.date LIKE ? ORDER BY e.date ASC
+      `).all(month + '%')
+    : db.prepare(`
+        SELECT e.*, u.name as author_name FROM calendar_events e
+        JOIN users u ON u.id = e.created_by
+        ORDER BY e.date ASC
+      `).all();
+  res.json({
+    events: rows.map(e => ({
+      id: e.id, date: e.date, title: e.title, description: e.description, authorName: e.author_name
+    }))
+  });
+});
+
+app.post('/api/calendario', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES), (req, res) => {
+  const { date, title, description } = req.body;
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Data invalida' });
+  }
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: 'Informe um titulo para o evento' });
+  }
+  const info = db.prepare(
+    'INSERT INTO calendar_events (date, title, description, created_by) VALUES (?, ?, ?, ?)'
+  ).run(date, title.trim(), (description || '').trim() || null, req.user.id);
+  const row = db.prepare(`
+    SELECT e.*, u.name as author_name FROM calendar_events e JOIN users u ON u.id = e.created_by WHERE e.id = ?
+  `).get(info.lastInsertRowid);
+  res.json({ event: { id: row.id, date: row.date, title: row.title, description: row.description, authorName: row.author_name } });
+});
+
+app.put('/api/calendario/:id', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES), (req, res) => {
+  const item = db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Evento nao encontrado' });
+  const { date, title, description } = req.body;
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Data invalida' });
+  }
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: 'Informe um titulo para o evento' });
+  }
+  db.prepare('UPDATE calendar_events SET date = ?, title = ?, description = ? WHERE id = ?')
+    .run(date, title.trim(), (description || '').trim() || null, item.id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/calendario/:id', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES), (req, res) => {
+  const item = db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Evento nao encontrado' });
+  db.prepare('DELETE FROM calendar_events WHERE id = ?').run(item.id);
   res.json({ ok: true });
 });
 
