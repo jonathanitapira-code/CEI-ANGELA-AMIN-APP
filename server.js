@@ -212,6 +212,17 @@ CREATE TABLE IF NOT EXISTS calendar_events (
   created_by INTEGER NOT NULL REFERENCES users(id),
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Mensagens privadas escondidas so para uma pessoa (ela pediu "apagar so pra
+-- mim" numa mensagem, ou excluiu a conversa inteira - nesse caso escondemos
+-- todas as mensagens que existiam ate aquele momento, de uma vez). A outra
+-- pessoa da conversa continua vendo tudo normalmente.
+CREATE TABLE IF NOT EXISTS dm_message_hidden (
+  message_id INTEGER NOT NULL REFERENCES dm_messages(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  hidden_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (message_id, user_id)
+);
 `);
 
 // Migracao segura para bancos que ja existiam antes da coluna "active" existir:
@@ -981,22 +992,35 @@ app.get('/api/conversations/contacts', requireAuth, (req, res) => {
 });
 
 app.get('/api/conversations', requireAuth, (req, res) => {
+  // "Nao escondida para mim" = a mensagem nao tem linha em dm_message_hidden
+  // para o meu usuario (ou seja, eu nao pedi pra apagar ela so pra mim).
+  const NOT_HIDDEN = `NOT IN (SELECT message_id FROM dm_message_hidden WHERE user_id = ?)`;
   const rows = db.prepare(`
     SELECT c.*,
       CASE WHEN c.user_a_id = ? THEN c.user_b_id ELSE c.user_a_id END as other_id,
-      (SELECT content FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_content,
-      (SELECT created_at FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_at,
-      (SELECT deleted_at FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_deleted_at,
-      (SELECT attachment_id FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_attachment_id,
+      (SELECT content FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ORDER BY id DESC LIMIT 1) as last_content,
+      (SELECT created_at FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ORDER BY id DESC LIMIT 1) as last_at,
+      (SELECT deleted_at FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ORDER BY id DESC LIMIT 1) as last_deleted_at,
+      (SELECT attachment_id FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ORDER BY id DESC LIMIT 1) as last_attachment_id,
       (
         SELECT COUNT(*) FROM dm_messages m
-        WHERE m.conversation_id = c.id AND m.sender_id != ? AND m.deleted_at IS NULL
+        WHERE m.conversation_id = c.id AND m.sender_id != ? AND m.deleted_at IS NULL AND m.id ${NOT_HIDDEN}
           AND m.id > COALESCE((SELECT last_read_message_id FROM conversation_message_reads WHERE user_id = ? AND conversation_id = c.id), 0)
       ) as unread_count
     FROM conversations c
-    WHERE c.user_a_id = ? OR c.user_b_id = ?
+    WHERE (c.user_a_id = ? OR c.user_b_id = ?)
+      AND (
+        NOT EXISTS (SELECT 1 FROM dm_messages m WHERE m.conversation_id = c.id)
+        OR EXISTS (SELECT 1 FROM dm_messages m WHERE m.conversation_id = c.id AND m.id ${NOT_HIDDEN})
+      )
     ORDER BY COALESCE(last_at, c.created_at) DESC
-  `).all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id);
+  `).all(
+    req.user.id, // CASE WHEN
+    req.user.id, req.user.id, req.user.id, req.user.id, // 4x NOT_HIDDEN nas subconsultas de preview
+    req.user.id, req.user.id, req.user.id, // unread_count: sender_id !=, NOT_HIDDEN, last_read_message_id
+    req.user.id, req.user.id, // WHERE user_a_id/user_b_id
+    req.user.id // NOT_HIDDEN na visibilidade da conversa
+  );
 
   const conversations = rows.map(r => {
     const other = db.prepare('SELECT id, name, role, avatar_filename FROM users WHERE id = ?').get(r.other_id);
@@ -1025,6 +1049,20 @@ app.post('/api/conversations/:id/read', requireAuth, requireConversationParticip
     conversationId: req.conversationId, userId: req.user.id, lastReadMessageId
   });
   res.json({ ok: true, lastReadMessageId });
+});
+
+// Exclui a conversa - so para quem pediu. Esconde todas as mensagens que
+// existem ate agora (so para essa pessoa); a outra pessoa continua vendo tudo
+// normalmente. Se chegar mensagem nova depois, a conversa reaparece sozinha
+// na lista (so as mensagens novas ficam visiveis).
+app.delete('/api/conversations/:id', requireAuth, requireConversationParticipant, (req, res) => {
+  const messageIds = db.prepare('SELECT id FROM dm_messages WHERE conversation_id = ?').all(req.conversationId);
+  const insert = db.prepare('INSERT OR IGNORE INTO dm_message_hidden (message_id, user_id) VALUES (?, ?)');
+  const insertMany = db.transaction((ids) => {
+    ids.forEach((row) => insert.run(row.id, req.user.id));
+  });
+  insertMany(messageIds);
+  res.json({ ok: true });
 });
 
 app.post('/api/conversations', requireAuth, (req, res) => {
@@ -1060,9 +1098,10 @@ app.get('/api/conversations/:id/messages', requireAuth, requireConversationParti
     JOIN users u ON u.id = m.sender_id
     LEFT JOIN attachments a ON a.id = m.attachment_id
     WHERE m.conversation_id = ?
+      AND m.id NOT IN (SELECT message_id FROM dm_message_hidden WHERE user_id = ?)
     ORDER BY m.id ASC
     LIMIT 200
-  `).all(req.conversationId);
+  `).all(req.conversationId, req.user.id);
 
   // Ate onde a outra pessoa da conversa ja leu, pra marcar "visto" nas minhas
   // proprias mensagens.
@@ -1175,6 +1214,20 @@ app.delete('/api/dm-messages/:id', requireAuth, (req, res) => {
     id: msg.id,
     conversationId: msg.conversation_id
   });
+  res.json({ ok: true });
+});
+
+// Apaga uma mensagem privada so para quem esta pedindo (a outra pessoa da
+// conversa continua vendo normalmente). Qualquer participante pode usar isso
+// em qualquer mensagem, mesmo enviada pela outra pessoa - diferente do apagar
+// "pra todos" acima, que so quem enviou pode fazer.
+app.post('/api/dm-messages/:id/hide-for-me', requireAuth, (req, res) => {
+  const msg = db.prepare('SELECT * FROM dm_messages WHERE id = ?').get(req.params.id);
+  if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
+  if (!isConversationParticipant(msg.conversation_id, req.user.id)) {
+    return res.status(403).json({ error: 'Voce nao faz parte desta conversa' });
+  }
+  db.prepare('INSERT OR IGNORE INTO dm_message_hidden (message_id, user_id) VALUES (?, ?)').run(msg.id, req.user.id);
   res.json({ ok: true });
 });
 

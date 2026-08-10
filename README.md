@@ -29,6 +29,8 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Mensagens não lidas e "visto por"**: cada turma e cada conversa privada mostra um número vermelho com a quantidade de mensagens não lidas (some assim que a pessoa abre o chat). Em toda mensagem que você mesmo enviou, aparece embaixo quem já viu — na turma mostra os nomes ("Visto por Fulana, Beltrana"), na conversa privada mostra só "Visto" quando a outra pessoa já leu. Atualiza sozinho, sem precisar atualizar a página.
 - **Busca na tela de "Nova conversa"**: ao abrir uma conversa privada nova, dá pra digitar o nome da pessoa para filtrar a lista de contatos, em vez de rolar tudo.
 - **Botão "Participantes"**: dentro do chat da turma, o antigo botão "Quem é quem" agora se chama "Participantes" (mesma função: ver quem está na turma e, se você tiver permissão, adicionar/remover pessoas).
+- **Excluir conversa privada**: na aba "Mensagens", cada conversa tem um ícone 🗑 para excluí-la — some só da sua lista; a outra pessoa continua vendo a conversa normalmente. Se ela mandar uma mensagem nova depois, a conversa reaparece pra você (só com as mensagens novas, as antigas continuam escondidas).
+- **Apagar mensagem privada só para mim**: dentro de uma conversa privada, toda mensagem tem um ícone 🙈 "Apagar somente para mim" — funciona em qualquer mensagem (sua ou da outra pessoa) e some só da sua tela. É diferente do 🗑 "Apagar para todos", que continua existindo só nas suas próprias mensagens e apaga pra ambos.
 - **Calendário escolar**: nova aba "Calendário" com uma visão de mês. Fins de semana e feriados nacionais (Carnaval, Sexta-feira Santa, Tiradentes, Corpus Christi, Independência, etc.) aparecem destacados automaticamente, calculados certinho ano a ano — inclusive o feriado municipal de **8 de dezembro** (Nossa Senhora da Conceição, padroeira de Imbituba). Diretora, Secretária e Estagiária/Professoras só visualizam; **somente Gestor e Coordenadora Pedagógica podem adicionar, editar ou excluir eventos** (reunião de pais, festa da família, arraiá cultural, entrega de portfólios etc.) clicando em qualquer dia do calendário.
 
 ## 📲 Instalar como aplicativo no celular
@@ -70,6 +72,8 @@ O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas fo
 **Sobre a atualização de "não lidas e visto por"**: essa aqui adiciona duas tabelas novas (`turma_message_reads`, `conversation_message_reads`) para guardar até onde cada pessoa já leu — também **não apaga nem exige recadastro de ninguém**.
 
 **Sobre a atualização do calendário escolar**: adiciona uma tabela nova (`calendar_events`) — também **não apaga nem exige recadastro de ninguém**.
+
+**Sobre a atualização de "excluir conversa" e "apagar só para mim"**: adiciona uma tabela nova (`dm_message_hidden`) — também **não apaga nem exige recadastro de ninguém**.
 
 ## Como rodar localmente
 

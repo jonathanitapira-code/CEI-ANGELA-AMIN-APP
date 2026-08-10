@@ -703,9 +703,16 @@
     const meta = el(`<div class="meta"></div>`);
     meta.innerHTML = `${avatarHtml(msg.user, 'small')} <b>${escapeHtml(msg.user.name)}</b> ${roleBadge(msg.user.role, msg.user.roleLabel)} <span>${fmtDateTime(msg.createdAt)}</span>`;
     if (msg.canDelete) {
-      const delBtn = el(`<button class="msg-del" title="Apagar mensagem">🗑</button>`);
+      const delBtn = el(`<button class="msg-del" title="Apagar mensagem para todos">🗑</button>`);
       delBtn.addEventListener('click', () => deleteMessage(msg.id));
       meta.appendChild(delBtn);
+    }
+    // Nas conversas privadas, qualquer participante pode apagar qualquer
+    // mensagem so para si mesmo (a outra pessoa continua vendo normalmente).
+    if (state.chat && state.chat.type === 'conversation') {
+      const hideBtn = el(`<button class="msg-del" title="Apagar somente para mim">🙈</button>`);
+      hideBtn.addEventListener('click', () => hideMessageForMe(msg.id));
+      meta.appendChild(hideBtn);
     }
     const bubble = el(`<div class="bubble"></div>`);
     if (msg.deleted) {
@@ -766,6 +773,18 @@
       markMessageDeleted(id, state.user.name);
     } catch (err) {
       alert('Erro ao apagar: ' + err.message);
+    }
+  }
+
+  // Apaga so para mim (a outra pessoa da conversa continua vendo normalmente).
+  async function hideMessageForMe(id) {
+    if (!confirm('Apagar esta mensagem somente para voce? A outra pessoa continua vendo normalmente.')) return;
+    try {
+      await api(`/api/dm-messages/${id}/hide-for-me`, { method: 'POST' });
+      const wrap = document.querySelector(`#chat-messages [data-msg-id="${id}"]`);
+      if (wrap) wrap.remove();
+    } catch (err) {
+      alert('Erro ao apagar mensagem: ' + err.message);
     }
   }
 
@@ -831,11 +850,22 @@
       return;
     }
     data.conversations.forEach(c => {
-      const card = el(`<div class="turma-card">
+      const card = el(`<div class="turma-card conversa-card">
+        <button class="btn-delete-conversa" title="Excluir conversa (so para voce)">🗑</button>
         <h3>${avatarHtml(c.other, 'small')} ${escapeHtml(c.other.name)} ${roleBadge(c.other.role, c.other.roleLabel)} ${c.unread_count > 0 ? `<span class="unread-badge">${c.unread_count}</span>` : ''}</h3>
         <p>${c.lastMessagePreview ? escapeHtml(c.lastMessagePreview) : 'Nenhuma mensagem ainda'}</p>
       </div>`);
       card.addEventListener('click', () => openConversation(c));
+      card.querySelector('.btn-delete-conversa').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Excluir a conversa com ${c.other.name}? Ela some so da sua lista - ${c.other.name} continua vendo as mensagens normalmente.`)) return;
+        try {
+          await api(`/api/conversations/${c.id}`, { method: 'DELETE' });
+          loadConversations();
+        } catch (err) {
+          alert('Erro ao excluir conversa: ' + err.message);
+        }
+      });
       grid.appendChild(card);
     });
   }
