@@ -33,7 +33,7 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Apagar mensagem privada só para mim**: dentro de uma conversa privada, toda mensagem tem um ícone 🙈 "Apagar somente para mim" — funciona em qualquer mensagem (sua ou da outra pessoa) e some só da sua tela. É diferente do 🗑 "Apagar para todos", que continua existindo só nas suas próprias mensagens e apaga pra ambos.
 - **Calendário escolar**: nova aba "Calendário" com uma visão de mês. Fins de semana e feriados nacionais (Carnaval, Sexta-feira Santa, Tiradentes, Corpus Christi, Independência, etc.) aparecem destacados automaticamente, calculados certinho ano a ano — inclusive o feriado municipal de **8 de dezembro** (Nossa Senhora da Conceição, padroeira de Imbituba). Diretora, Secretária e Estagiária/Professoras só visualizam; **somente Gestor e Coordenadora Pedagógica podem adicionar, editar ou excluir eventos** (reunião de pais, festa da família, arraiá cultural, entrega de portfólios etc.) clicando em qualquer dia do calendário.
 - **Editar item do cardápio**: além de Diretora/Coordenadora Pedagógica/Gestor (que já podiam remover qualquer item), agora **Cozinha, Secretária e Coordenadora Pedagógica** também podem clicar em "editar" em qualquer item do cardápio (mesmo criado por outra pessoa) para corrigir data, refeição ou descrição, sem precisar excluir e recriar.
-- **Encaminhar mensagem da turma**: toda mensagem de texto no chat da turma agora tem um botão ↪️ "Encaminhar". Quem usa escolhe uma pessoa entre Professora Regente, Secretária, Coordenadora Pedagógica, Diretora ou Gestor, e a mensagem é enviada como conversa privada para essa pessoa (com uma legenda avisando de qual turma e de quem é a mensagem original). Só funciona com mensagens de texto (anexos não podem ser encaminhados por aqui).
+- **Encaminhar recado para outras turmas**: toda mensagem de texto no chat da turma tem um botão ↪️ "Encaminhar" visível para Professora Regente, Secretária, Coordenadora Pedagógica, Diretora e Gestor. Ao clicar, a pessoa escolhe uma, várias ou todas as outras turmas da creche (tem um botão "Selecionar todas") e o recado aparece no chat de cada turma escolhida, com uma legenda avisando de qual turma e de quem é a mensagem original (ex: secretária avisa algo na turma Infantil 1 e encaminha o mesmo recado para todas as outras turmas de uma vez, sem reescrever). Só funciona com mensagens de texto (anexos não podem ser encaminhados por aqui).
 - **Responder mensagem na turma**: toda mensagem no chat da turma tem um botão ↩️ "Responder" — a mensagem nova aparece com uma citação da original acima dela (nome de quem escreveu + um resuminho do texto), igual a apps de mensagem comuns. Há um botão para cancelar a resposta antes de enviar.
 - **Enquete na turma**: Professora Regente, Professora Auxiliar, Estagiária e qualquer pessoa da Direção (Diretora, Coordenadora Pedagógica, Secretária, Gestor) podem clicar em "📊 Enquete" dentro de uma turma para criar uma pergunta com até 8 opções. Qualquer participante da turma vota uma vez (votar de novo troca o voto anterior, não soma dois votos) e **todo mundo da turma vê, em tempo real, quantos votos cada opção tem e o nome de quem votou em cada uma** — nada de voto anônimo aqui.
 
@@ -184,12 +184,10 @@ uploads/
 | Redefinir senha de outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Alterar papel / excluir outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Adicionar/editar/excluir evento no calendário | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ |
-| Encaminhar mensagem da turma (para direção/regente) | ✅* | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Encaminhar recado da turma para outras turmas | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Responder mensagem no chat da turma | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Criar enquete na turma          | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Votar em enquete da turma       | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-
-\* Encaminhar mensagem: qualquer membro da turma pode encaminhar, mas só para quem ele já teria permissão de mandar mensagem privada (ex: um Responsável só encaminha para a Professora Regente se ela for da turma do filho dele; para a Direção sempre pode).
 
 Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi adicionada por quem gerencia a turma).
 

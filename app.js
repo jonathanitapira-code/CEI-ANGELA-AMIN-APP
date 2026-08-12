@@ -719,8 +719,8 @@
       const replyBtn = el(`<button class="msg-del" title="Responder">↩️</button>`);
       replyBtn.addEventListener('click', () => startReplyTo(msg));
       meta.appendChild(replyBtn);
-      if (msg.content) {
-        const fwdBtn = el(`<button class="msg-del" title="Encaminhar">↪️</button>`);
+      if (msg.content && FORWARD_TARGET_ROLES.includes(state.user.role)) {
+        const fwdBtn = el(`<button class="msg-del" title="Encaminhar para outras turmas">↪️</button>`);
         fwdBtn.addEventListener('click', () => openForwardModal(msg));
         meta.appendChild(fwdBtn);
       }
@@ -819,34 +819,55 @@
       const data = await api(`/api/turmas/${state.chat.id}/forward-targets`);
       targets = data.targets;
     } catch (err) {
-      alert('Erro ao carregar lista de pessoas: ' + err.message);
+      alert('Erro ao carregar lista de turmas: ' + err.message);
       return;
     }
     const rows = targets.map(t => `
-      <div class="member-row contact-row" data-user-id="${t.id}" style="cursor:pointer">
-        ${avatarHtml(t)}
-        ${roleBadge(t.role, t.roleLabel)}
-        <div><div class="name">${escapeHtml(t.name)}</div></div>
+      <div class="member-row" style="cursor:pointer">
+        <label style="display:flex;align-items:center;gap:10px;width:100%;cursor:pointer">
+          <input type="checkbox" class="fwd-turma-check" value="${t.id}" style="width:18px;height:18px" />
+          <span class="name">${escapeHtml(t.name)}</span>
+        </label>
       </div>`).join('');
     const modal = openModal(`
-      <h3>Encaminhar mensagem</h3>
-      <p style="font-size:13px;color:#666">Escolha para quem encaminhar esta mensagem como mensagem privada.</p>
-      <div>${rows || '<p>Nenhuma pessoa disponivel para encaminhar no momento.</p>'}</div>
+      <h3>Encaminhar recado para outras turmas</h3>
+      <p style="font-size:13px;color:#666">Escolha para quais turmas encaminhar este recado. Ele aparece no chat de cada turma selecionada, avisando de qual turma veio.</p>
+      ${targets.length ? '<button type="button" class="btn ghost" id="btn-fwd-select-all" style="font-size:12px;padding:4px 10px;margin-bottom:8px">Selecionar todas</button>' : ''}
+      <div id="fwd-turma-rows">${rows || '<p>Nao ha outras turmas para encaminhar no momento.</p>'}</div>
       <div class="error-msg" id="forward-error"></div>
-      <div class="modal-actions"><button class="btn secondary" id="cancel-forward">Fechar</button></div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="cancel-forward">Cancelar</button>
+        ${targets.length ? '<button class="btn" id="confirm-forward">Encaminhar</button>' : ''}
+      </div>
     `);
     document.getElementById('cancel-forward').addEventListener('click', closeModal);
-    modal.querySelectorAll('.contact-row').forEach(row => {
-      row.addEventListener('click', async () => {
-        const toUserId = Number(row.dataset.userId);
+    const selectAllBtn = document.getElementById('btn-fwd-select-all');
+    if (selectAllBtn) {
+      selectAllBtn.addEventListener('click', () => {
+        const boxes = modal.querySelectorAll('.fwd-turma-check');
+        const allChecked = Array.from(boxes).every(b => b.checked);
+        boxes.forEach(b => { b.checked = !allChecked; });
+        selectAllBtn.textContent = allChecked ? 'Selecionar todas' : 'Desmarcar todas';
+      });
+    }
+    const confirmBtn = document.getElementById('confirm-forward');
+    if (confirmBtn) {
+      confirmBtn.addEventListener('click', async () => {
+        const toTurmaIds = Array.from(modal.querySelectorAll('.fwd-turma-check:checked')).map(b => Number(b.value));
+        if (!toTurmaIds.length) {
+          document.getElementById('forward-error').textContent = 'Escolha pelo menos uma turma';
+          return;
+        }
         try {
-          await api(`/api/turmas/${state.chat.id}/messages/${msg.id}/forward`, { method: 'POST', body: { toUserId } });
+          const data = await api(`/api/turmas/${state.chat.id}/messages/${msg.id}/forward`, { method: 'POST', body: { toTurmaIds } });
           closeModal();
+          const names = (data.sent || []).map(s => s.turmaName).join(', ');
+          if (names) alert('Recado encaminhado para: ' + names);
         } catch (err) {
           document.getElementById('forward-error').textContent = err.message;
         }
       });
-    });
+    }
   }
 
   // ------------------------------------------------------------------

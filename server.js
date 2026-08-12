@@ -404,7 +404,7 @@ const MODERACAO_TURMA_ROLES = ['professora_regente', ...DIRECAO_ROLES];
 // Gestor sempre passa em qualquer checagem (requireRole ja garante isso
 // automaticamente), entao so precisa listar aqui quem MAIS, alem dele, pode.
 const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica'];
-// Para quem uma mensagem da turma pode ser encaminhada (via "Encaminhar")
+// Quem pode encaminhar um recado da turma para o chat de outras turmas
 const FORWARD_TARGET_ROLES = ['professora_regente', 'secretaria', 'coordenadora_pedagogica', 'diretora', 'gestor'];
 // Quem pode criar enquete dentro de uma turma (nunca responsavel, nunca cozinha)
 const POLL_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', ...DIRECAO_ROLES];
@@ -977,6 +977,65 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
   });
 });
 
+// Cria uma mensagem de texto/anexo numa turma e cuida de todos os efeitos
+// colaterais (emitir pro chat ao vivo, notificar push, atualizar nao lidas,
+// marcar como lida pra quem enviou). Reaproveitada pelo envio normal de
+// mensagem e pelo "encaminhar recado para outras turmas".
+function createTurmaMessage(turmaId, userId, content, attachmentId, replyToId) {
+  const info = db.prepare(
+    'INSERT INTO messages (turma_id, user_id, content, attachment_id, reply_to_message_id) VALUES (?, ?, ?, ?, ?)'
+  ).run(turmaId, userId, content ? content.trim() : null, attachmentId || null, replyToId || null);
+
+  const row = db.prepare(`
+    SELECT msg.*, u.name as user_name, u.role as user_role, u.avatar_filename as user_avatar,
+           a.id as att_id, a.kind as att_kind, a.original_name as att_name
+    FROM messages msg
+    JOIN users u ON u.id = msg.user_id
+    LEFT JOIN attachments a ON a.id = msg.attachment_id
+    WHERE msg.id = ?
+  `).get(info.lastInsertRowid);
+
+  const payload = {
+    id: row.id,
+    turmaId: turmaId,
+    content: row.content,
+    createdAt: row.created_at,
+    user: {
+      id: row.user_id, name: row.user_name, role: row.user_role, roleLabel: ROLE_LABELS[row.user_role],
+      avatarUrl: row.user_avatar ? `/api/avatar/${row.user_id}` : null
+    },
+    attachment: row.att_id ? { id: row.att_id, kind: row.att_kind, name: row.att_name } : null,
+    deleted: false,
+    deletedByName: null,
+    canDelete: row.user_id === userId,
+    readBy: [],
+    replyTo: getMessageReplyPreview(replyToId),
+    poll: null
+  };
+
+  io.to('turma_' + turmaId).emit('new_message', payload);
+
+  // Notifica push quem e da turma, exceto quem enviou e quem ja esta com o
+  // chat dessa turma aberto na tela (essa pessoa ja viu a mensagem chegar).
+  const turmaRow = db.prepare('SELECT name FROM turmas WHERE id = ?').get(turmaId);
+  const memberIds = db.prepare('SELECT user_id FROM turma_members WHERE turma_id = ?').all(turmaId).map(r => r.user_id);
+  const viewingNow = getUserIdsInRoom('turma_' + turmaId);
+  const notifyIds = memberIds.filter(uid => uid !== userId && !viewingNow.has(uid));
+  sendPushToUsers(notifyIds, {
+    title: turmaRow ? turmaRow.name : 'Nova mensagem',
+    body: row.content ? `${row.user_name}: ${row.content}` : `${row.user_name} enviou ${row.att_kind === 'pdf' ? 'um PDF' : 'uma foto'}`,
+    url: `/?openTurma=${turmaId}`
+  });
+  // Avisa (na sala pessoal) quem nao esta vendo esse chat agora pra atualizar
+  // o numerinho de nao lidas na lista de turmas, sem precisar recarregar.
+  notifyIds.forEach((uid) => io.to('user_' + uid).emit('unread_bump', { kind: 'turma', id: turmaId }));
+
+  // Quem enviou tambem "leu" ate a propria mensagem (mantem o ponteiro em dia).
+  markTurmaRead(turmaId, userId);
+
+  return payload;
+}
+
 app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) => {
   const { content, attachmentId, replyToMessageId } = req.body;
   if ((!content || !content.trim()) && !attachmentId) {
@@ -993,100 +1052,51 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
     const replyTarget = db.prepare('SELECT id FROM messages WHERE id = ? AND turma_id = ?').get(replyToMessageId, req.turmaId);
     if (replyTarget) replyToId = replyTarget.id;
   }
-  const info = db.prepare(
-    'INSERT INTO messages (turma_id, user_id, content, attachment_id, reply_to_message_id) VALUES (?, ?, ?, ?, ?)'
-  ).run(req.turmaId, req.user.id, content ? content.trim() : null, attachmentId || null, replyToId);
-
-  const row = db.prepare(`
-    SELECT msg.*, u.name as user_name, u.role as user_role, u.avatar_filename as user_avatar,
-           a.id as att_id, a.kind as att_kind, a.original_name as att_name
-    FROM messages msg
-    JOIN users u ON u.id = msg.user_id
-    LEFT JOIN attachments a ON a.id = msg.attachment_id
-    WHERE msg.id = ?
-  `).get(info.lastInsertRowid);
-
-  const payload = {
-    id: row.id,
-    turmaId: req.turmaId,
-    content: row.content,
-    createdAt: row.created_at,
-    user: {
-      id: row.user_id, name: row.user_name, role: row.user_role, roleLabel: ROLE_LABELS[row.user_role],
-      avatarUrl: row.user_avatar ? `/api/avatar/${row.user_id}` : null
-    },
-    attachment: row.att_id ? { id: row.att_id, kind: row.att_kind, name: row.att_name } : null,
-    deleted: false,
-    deletedByName: null,
-    canDelete: true,
-    readBy: [],
-    replyTo: getMessageReplyPreview(replyToId),
-    poll: null
-  };
-
-  io.to('turma_' + req.turmaId).emit('new_message', payload);
-
-  // Notifica push quem e da turma, exceto quem enviou e quem ja esta com o
-  // chat dessa turma aberto na tela (essa pessoa ja viu a mensagem chegar).
-  const turmaRow = db.prepare('SELECT name FROM turmas WHERE id = ?').get(req.turmaId);
-  const memberIds = db.prepare('SELECT user_id FROM turma_members WHERE turma_id = ?').all(req.turmaId).map(r => r.user_id);
-  const viewingNow = getUserIdsInRoom('turma_' + req.turmaId);
-  const notifyIds = memberIds.filter(uid => uid !== req.user.id && !viewingNow.has(uid));
-  sendPushToUsers(notifyIds, {
-    title: turmaRow ? turmaRow.name : 'Nova mensagem',
-    body: row.content ? `${row.user_name}: ${row.content}` : `${row.user_name} enviou ${row.att_kind === 'pdf' ? 'um PDF' : 'uma foto'}`,
-    url: `/?openTurma=${req.turmaId}`
-  });
-  // Avisa (na sala pessoal) quem nao esta vendo esse chat agora pra atualizar
-  // o numerinho de nao lidas na lista de turmas, sem precisar recarregar.
-  notifyIds.forEach((uid) => io.to('user_' + uid).emit('unread_bump', { kind: 'turma', id: req.turmaId }));
-
-  // Quem enviou tambem "leu" ate a propria mensagem (mantem o ponteiro em dia).
-  markTurmaRead(req.turmaId, req.user.id);
-
+  const payload = createTurmaMessage(req.turmaId, req.user.id, content, attachmentId, replyToId);
   res.json({ message: payload });
 });
 
-// Lista de pessoas para quem e possivel encaminhar uma mensagem da turma
-// (professora regente, secretaria, coordenadora pedagogica, diretora, gestor).
-app.get('/api/turmas/:id/forward-targets', requireAuth, requireTurmaMember, (req, res) => {
-  const candidates = db.prepare('SELECT * FROM users WHERE id != ? AND active = 1').all(req.user.id);
-  const targets = candidates
-    .filter(c => FORWARD_TARGET_ROLES.includes(c.role) && canStartConversation(req.user, c))
-    .map(c => ({
-      id: c.id, name: c.name, role: c.role, roleLabel: ROLE_LABELS[c.role],
-      avatarUrl: c.avatar_filename ? `/api/avatar/${c.id}` : null
-    }));
+// Lista de turmas para as quais e possivel encaminhar um recado desta turma
+// (todas as outras turmas da creche, ja que quem encaminha e sempre alguem
+// da equipe com alcance sobre a creche toda - Regente, Secretaria, Coord.
+// Pedagogica, Diretora ou Gestor).
+app.get('/api/turmas/:id/forward-targets', requireAuth, requireTurmaMember, requireRole(...FORWARD_TARGET_ROLES), (req, res) => {
+  const targets = db.prepare('SELECT id, name FROM turmas WHERE id != ? ORDER BY name').all(req.turmaId);
   res.json({ targets });
 });
 
-// Encaminha uma mensagem de texto da turma para uma conversa privada com
-// alguem da direcao ou a professora regente. So funciona com mensagens que
-// tem texto (anexos nao podem ser encaminhados por aqui).
-app.post('/api/turmas/:id/messages/:msgId/forward', requireAuth, requireTurmaMember, (req, res) => {
+// Encaminha um recado de texto desta turma para o chat de uma ou mais outras
+// turmas (broadcast). So funciona com mensagens que tem texto (anexos nao
+// podem ser encaminhados por aqui). Restrito a Professora Regente, Secretaria,
+// Coordenadora Pedagogica, Diretora e Gestor.
+app.post('/api/turmas/:id/messages/:msgId/forward', requireAuth, requireTurmaMember, requireRole(...FORWARD_TARGET_ROLES), (req, res) => {
   const msg = db.prepare('SELECT * FROM messages WHERE id = ? AND turma_id = ?').get(req.params.msgId, req.turmaId);
   if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
   if (msg.deleted_at) return res.status(400).json({ error: 'Esta mensagem foi removida e nao pode ser encaminhada' });
   if (!msg.content || !msg.content.trim()) {
     return res.status(400).json({ error: 'So e possivel encaminhar mensagens com texto' });
   }
-  const toUserId = Number(req.body.toUserId);
-  const toUser = db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(toUserId);
-  if (!toUser) return res.status(404).json({ error: 'Pessoa nao encontrada' });
-  if (!FORWARD_TARGET_ROLES.includes(toUser.role)) {
-    return res.status(403).json({ error: 'So e possivel encaminhar para Professora Regente, Secretaria, Coordenadora Pedagogica, Diretora ou Gestor' });
+  const toTurmaIds = Array.isArray(req.body.toTurmaIds) ? [...new Set(req.body.toTurmaIds.map(Number))] : [];
+  if (!toTurmaIds.length) {
+    return res.status(400).json({ error: 'Escolha pelo menos uma turma para encaminhar' });
   }
-  if (!canStartConversation(req.user, toUser)) {
-    return res.status(403).json({ error: 'Voce nao pode enviar mensagem para esta pessoa' });
+  const validTurmas = db.prepare(
+    `SELECT id, name FROM turmas WHERE id IN (${toTurmaIds.map(() => '?').join(',')}) AND id != ?`
+  ).all(...toTurmaIds, req.turmaId);
+  if (!validTurmas.length) {
+    return res.status(400).json({ error: 'Nenhuma turma valida selecionada' });
   }
 
   const turma = db.prepare('SELECT name FROM turmas WHERE id = ?').get(req.turmaId);
   const originalSender = db.prepare('SELECT name FROM users WHERE id = ?').get(msg.user_id);
   const forwardedContent = `↪️ Encaminhado da turma "${turma ? turma.name : ''}" (${originalSender ? originalSender.name : 'alguem'}):\n${msg.content}`;
 
-  const conv = findOrCreateConversation(req.user.id, toUserId);
-  const payload = createDmMessage(conv.id, req.user.id, forwardedContent, null);
-  res.json({ message: payload, conversationId: conv.id });
+  const sent = validTurmas.map((t) => {
+    const payload = createTurmaMessage(t.id, req.user.id, forwardedContent, null, null);
+    return { turmaId: t.id, turmaName: t.name, message: payload };
+  });
+
+  res.json({ sent });
 });
 
 // ---------------------------------------------------------------------------
