@@ -217,9 +217,17 @@
         <button class="btn ghost" id="btn-back-turmas">&larr;</button>
         <h3 id="chat-turma-name"></h3>
         <button class="btn secondary" id="btn-invite">Convite</button>
+        <button class="btn secondary hidden" id="btn-poll" title="Criar enquete">📊 Enquete</button>
         <button class="btn secondary" id="btn-members">Participantes</button>
       </div>
       <div class="chat-messages" id="chat-messages"></div>
+      <div class="reply-preview hidden" id="reply-preview">
+        <div class="reply-preview-body">
+          <span class="reply-preview-label">Respondendo a <b id="reply-preview-name"></b></span>
+          <span class="reply-preview-snippet" id="reply-preview-snippet"></span>
+        </div>
+        <button class="icon-btn" id="btn-cancel-reply" title="Cancelar resposta">✕</button>
+      </div>
       <div class="chat-input-bar">
         <button class="icon-btn" id="btn-attach" title="Anexar imagem ou PDF">📎</button>
         <input type="file" id="file-input" accept="image/*,application/pdf" class="hidden" />

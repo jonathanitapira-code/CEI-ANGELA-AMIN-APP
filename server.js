@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS messages (
   attachment_id INTEGER,
   deleted_at TEXT,
   deleted_by INTEGER REFERENCES users(id),
+  reply_to_message_id INTEGER REFERENCES messages(id),
+  poll_id INTEGER,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -223,6 +225,34 @@ CREATE TABLE IF NOT EXISTS dm_message_hidden (
   hidden_at TEXT DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (message_id, user_id)
 );
+
+-- Enquetes dentro da turma: a pergunta + as opcoes ficam aqui, e a mensagem
+-- correspondente (tabela "messages", com poll_id preenchido) e so o que
+-- posiciona a enquete no lugar certo da conversa.
+CREATE TABLE IF NOT EXISTS polls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  turma_id INTEGER NOT NULL REFERENCES turmas(id),
+  question TEXT NOT NULL,
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS poll_options (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  poll_id INTEGER NOT NULL REFERENCES polls(id),
+  option_text TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0
+);
+
+-- Uma linha por pessoa por enquete (PRIMARY KEY garante "vota so uma vez" -
+-- votar de novo so troca a opcao escolhida, nao cria voto duplicado).
+CREATE TABLE IF NOT EXISTS poll_votes (
+  poll_id INTEGER NOT NULL REFERENCES polls(id),
+  option_id INTEGER NOT NULL REFERENCES poll_options(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  voted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (poll_id, user_id)
+);
 `);
 
 // Migracao segura para bancos que ja existiam antes da coluna "active" existir:
@@ -232,6 +262,13 @@ CREATE TABLE IF NOT EXISTS dm_message_hidden (
 const userColumns = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!userColumns.includes('active')) {
   db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+}
+const messageColumns = db.prepare('PRAGMA table_info(messages)').all().map(c => c.name);
+if (!messageColumns.includes('reply_to_message_id')) {
+  db.exec('ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER');
+}
+if (!messageColumns.includes('poll_id')) {
+  db.exec('ALTER TABLE messages ADD COLUMN poll_id INTEGER');
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +389,9 @@ const TURMA_CREATE_ROLES = ['gestor'];
 const CARDAPIO_ROLES = ['cozinha', 'professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'gestor'];
 // Quem pode remover itens do cardapio criados por outra pessoa
 const CARDAPIO_ADMIN_ROLES = ['diretora', 'coordenadora_pedagogica', 'gestor'];
+// Quem pode editar (corrigir) qualquer item do cardapio, mesmo criado por
+// outra pessoa - grupo especifico pedido para essa funcionalidade
+const CARDAPIO_EDIT_ROLES = ['cozinha', 'secretaria', 'coordenadora_pedagogica'];
 // Quem pode lancar receitas/despesas
 const FIN_MANAGE_ROLES = ['diretora', 'gestor', 'secretaria'];
 // Quem pode excluir lancamentos financeiros
@@ -364,6 +404,52 @@ const MODERACAO_TURMA_ROLES = ['professora_regente', ...DIRECAO_ROLES];
 // Gestor sempre passa em qualquer checagem (requireRole ja garante isso
 // automaticamente), entao so precisa listar aqui quem MAIS, alem dele, pode.
 const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica'];
+// Para quem uma mensagem da turma pode ser encaminhada (via "Encaminhar")
+const FORWARD_TARGET_ROLES = ['professora_regente', 'secretaria', 'coordenadora_pedagogica', 'diretora', 'gestor'];
+// Quem pode criar enquete dentro de uma turma (nunca responsavel, nunca cozinha)
+const POLL_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', ...DIRECAO_ROLES];
+
+// Monta a "citacao" de uma mensagem original quando outra mensagem responde
+// ela (nome de quem enviou + um resuminho do conteudo).
+function getMessageReplyPreview(replyToId) {
+  if (!replyToId) return null;
+  const orig = db.prepare(`
+    SELECT m.id, m.content, m.deleted_at, m.attachment_id, u.name as author_name
+    FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?
+  `).get(replyToId);
+  if (!orig) return null;
+  let snippet;
+  if (orig.deleted_at) snippet = 'Mensagem removida';
+  else if (orig.content) snippet = orig.content.length > 120 ? orig.content.slice(0, 120) + '…' : orig.content;
+  else if (orig.attachment_id) snippet = 'Anexo';
+  else snippet = '';
+  return { id: orig.id, authorName: orig.author_name, snippet };
+}
+
+// Monta os dados completos de uma enquete (pergunta, opcoes, contagem de
+// votos e quem votou em cada uma - transparente para todo mundo da turma).
+function getPollPayload(pollId, forUserId) {
+  const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+  if (!poll) return null;
+  const options = db.prepare('SELECT * FROM poll_options WHERE poll_id = ? ORDER BY position, id').all(pollId);
+  const votes = db.prepare(`
+    SELECT v.option_id, v.user_id, u.name as user_name FROM poll_votes v
+    JOIN users u ON u.id = v.user_id WHERE v.poll_id = ?
+  `).all(pollId);
+  const myVote = votes.find(v => v.user_id === forUserId);
+  return {
+    id: poll.id,
+    question: poll.question,
+    options: options.map(o => ({
+      id: o.id,
+      text: o.option_text,
+      count: votes.filter(v => v.option_id === o.id).length,
+      voters: votes.filter(v => v.option_id === o.id).map(v => v.user_name)
+    })),
+    totalVotes: votes.length,
+    myOptionId: myVote ? myVote.option_id : null
+  };
+}
 
 function publicUser(u) {
   if (!u) return null;
@@ -884,13 +970,15 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
       canDelete: !r.deleted_at && (r.user_id === req.user.id || MODERACAO_TURMA_ROLES.includes(req.user.role)),
       readBy: readsForTurma
         .filter(mr => mr.user_id !== r.user_id && mr.last_read_message_id >= r.id)
-        .map(mr => mr.name)
+        .map(mr => mr.name),
+      replyTo: getMessageReplyPreview(r.reply_to_message_id),
+      poll: r.poll_id ? getPollPayload(r.poll_id, req.user.id) : null
     }))
   });
 });
 
 app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) => {
-  const { content, attachmentId } = req.body;
+  const { content, attachmentId, replyToMessageId } = req.body;
   if ((!content || !content.trim()) && !attachmentId) {
     return res.status(400).json({ error: 'Mensagem vazia' });
   }
@@ -900,9 +988,14 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
       return res.status(400).json({ error: 'Anexo invalido para esta turma' });
     }
   }
+  let replyToId = null;
+  if (replyToMessageId) {
+    const replyTarget = db.prepare('SELECT id FROM messages WHERE id = ? AND turma_id = ?').get(replyToMessageId, req.turmaId);
+    if (replyTarget) replyToId = replyTarget.id;
+  }
   const info = db.prepare(
-    'INSERT INTO messages (turma_id, user_id, content, attachment_id) VALUES (?, ?, ?, ?)'
-  ).run(req.turmaId, req.user.id, content ? content.trim() : null, attachmentId || null);
+    'INSERT INTO messages (turma_id, user_id, content, attachment_id, reply_to_message_id) VALUES (?, ?, ?, ?, ?)'
+  ).run(req.turmaId, req.user.id, content ? content.trim() : null, attachmentId || null, replyToId);
 
   const row = db.prepare(`
     SELECT msg.*, u.name as user_name, u.role as user_role, u.avatar_filename as user_avatar,
@@ -926,7 +1019,9 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
     deleted: false,
     deletedByName: null,
     canDelete: true,
-    readBy: []
+    readBy: [],
+    replyTo: getMessageReplyPreview(replyToId),
+    poll: null
   };
 
   io.to('turma_' + req.turmaId).emit('new_message', payload);
@@ -950,6 +1045,142 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
   markTurmaRead(req.turmaId, req.user.id);
 
   res.json({ message: payload });
+});
+
+// Lista de pessoas para quem e possivel encaminhar uma mensagem da turma
+// (professora regente, secretaria, coordenadora pedagogica, diretora, gestor).
+app.get('/api/turmas/:id/forward-targets', requireAuth, requireTurmaMember, (req, res) => {
+  const candidates = db.prepare('SELECT * FROM users WHERE id != ? AND active = 1').all(req.user.id);
+  const targets = candidates
+    .filter(c => FORWARD_TARGET_ROLES.includes(c.role) && canStartConversation(req.user, c))
+    .map(c => ({
+      id: c.id, name: c.name, role: c.role, roleLabel: ROLE_LABELS[c.role],
+      avatarUrl: c.avatar_filename ? `/api/avatar/${c.id}` : null
+    }));
+  res.json({ targets });
+});
+
+// Encaminha uma mensagem de texto da turma para uma conversa privada com
+// alguem da direcao ou a professora regente. So funciona com mensagens que
+// tem texto (anexos nao podem ser encaminhados por aqui).
+app.post('/api/turmas/:id/messages/:msgId/forward', requireAuth, requireTurmaMember, (req, res) => {
+  const msg = db.prepare('SELECT * FROM messages WHERE id = ? AND turma_id = ?').get(req.params.msgId, req.turmaId);
+  if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
+  if (msg.deleted_at) return res.status(400).json({ error: 'Esta mensagem foi removida e nao pode ser encaminhada' });
+  if (!msg.content || !msg.content.trim()) {
+    return res.status(400).json({ error: 'So e possivel encaminhar mensagens com texto' });
+  }
+  const toUserId = Number(req.body.toUserId);
+  const toUser = db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(toUserId);
+  if (!toUser) return res.status(404).json({ error: 'Pessoa nao encontrada' });
+  if (!FORWARD_TARGET_ROLES.includes(toUser.role)) {
+    return res.status(403).json({ error: 'So e possivel encaminhar para Professora Regente, Secretaria, Coordenadora Pedagogica, Diretora ou Gestor' });
+  }
+  if (!canStartConversation(req.user, toUser)) {
+    return res.status(403).json({ error: 'Voce nao pode enviar mensagem para esta pessoa' });
+  }
+
+  const turma = db.prepare('SELECT name FROM turmas WHERE id = ?').get(req.turmaId);
+  const originalSender = db.prepare('SELECT name FROM users WHERE id = ?').get(msg.user_id);
+  const forwardedContent = `↪️ Encaminhado da turma "${turma ? turma.name : ''}" (${originalSender ? originalSender.name : 'alguem'}):\n${msg.content}`;
+
+  const conv = findOrCreateConversation(req.user.id, toUserId);
+  const payload = createDmMessage(conv.id, req.user.id, forwardedContent, null);
+  res.json({ message: payload, conversationId: conv.id });
+});
+
+// ---------------------------------------------------------------------------
+// Enquetes dentro da turma
+// ---------------------------------------------------------------------------
+
+// Cria a enquete (pergunta + opcoes) e uma "mensagem" pra ela aparecer no
+// lugar certo do chat, em tempo real pra quem esta na turma agora.
+app.post('/api/turmas/:id/polls', requireAuth, requireTurmaMember, requireRole(...POLL_CREATE_ROLES), (req, res) => {
+  const { question } = req.body;
+  const options = Array.isArray(req.body.options) ? req.body.options.map(o => (o || '').trim()).filter(Boolean) : [];
+  if (!question || !question.trim()) {
+    return res.status(400).json({ error: 'Informe a pergunta da enquete' });
+  }
+  if (options.length < 2) {
+    return res.status(400).json({ error: 'Informe pelo menos 2 opcoes' });
+  }
+  if (options.length > 8) {
+    return res.status(400).json({ error: 'No maximo 8 opcoes' });
+  }
+
+  const pollInfo = db.prepare(
+    'INSERT INTO polls (turma_id, question, created_by) VALUES (?, ?, ?)'
+  ).run(req.turmaId, question.trim(), req.user.id);
+  const pollId = pollInfo.lastInsertRowid;
+
+  const insertOption = db.prepare('INSERT INTO poll_options (poll_id, option_text, position) VALUES (?, ?, ?)');
+  options.forEach((text, idx) => insertOption.run(pollId, text, idx));
+
+  const msgInfo = db.prepare(
+    'INSERT INTO messages (turma_id, user_id, poll_id) VALUES (?, ?, ?)'
+  ).run(req.turmaId, req.user.id, pollId);
+
+  const msgRow = db.prepare(`
+    SELECT msg.*, u.name as user_name, u.role as user_role, u.avatar_filename as user_avatar
+    FROM messages msg JOIN users u ON u.id = msg.user_id WHERE msg.id = ?
+  `).get(msgInfo.lastInsertRowid);
+
+  const payload = {
+    id: msgRow.id,
+    turmaId: req.turmaId,
+    content: null,
+    createdAt: msgRow.created_at,
+    user: {
+      id: msgRow.user_id, name: msgRow.user_name, role: msgRow.user_role, roleLabel: ROLE_LABELS[msgRow.user_role],
+      avatarUrl: msgRow.user_avatar ? `/api/avatar/${msgRow.user_id}` : null
+    },
+    attachment: null,
+    deleted: false,
+    deletedByName: null,
+    canDelete: false,
+    readBy: [],
+    replyTo: null,
+    poll: getPollPayload(pollId, req.user.id)
+  };
+
+  io.to('turma_' + req.turmaId).emit('new_message', payload);
+
+  const memberIds = db.prepare('SELECT user_id FROM turma_members WHERE turma_id = ?').all(req.turmaId).map(r => r.user_id);
+  const viewingNow = getUserIdsInRoom('turma_' + req.turmaId);
+  const notifyIds = memberIds.filter(uid => uid !== req.user.id && !viewingNow.has(uid));
+  const turmaRow = db.prepare('SELECT name FROM turmas WHERE id = ?').get(req.turmaId);
+  sendPushToUsers(notifyIds, {
+    title: turmaRow ? turmaRow.name : 'Nova enquete',
+    body: `${msgRow.user_name} criou uma enquete: ${question.trim()}`,
+    url: `/?openTurma=${req.turmaId}`
+  });
+  notifyIds.forEach((uid) => io.to('user_' + uid).emit('unread_bump', { kind: 'turma', id: req.turmaId }));
+  markTurmaRead(req.turmaId, req.user.id);
+
+  res.json({ message: payload });
+});
+
+// Vota (ou troca o voto) numa enquete. Uma pessoa so tem um voto valendo por
+// vez - votar de novo so substitui a escolha anterior.
+app.post('/api/turmas/:id/polls/:pollId/vote', requireAuth, requireTurmaMember, (req, res) => {
+  const poll = db.prepare('SELECT * FROM polls WHERE id = ? AND turma_id = ?').get(req.params.pollId, req.turmaId);
+  if (!poll) return res.status(404).json({ error: 'Enquete nao encontrada' });
+  const option = db.prepare('SELECT * FROM poll_options WHERE id = ? AND poll_id = ?').get(req.body.optionId, poll.id);
+  if (!option) return res.status(400).json({ error: 'Opcao invalida' });
+
+  db.prepare(`
+    INSERT INTO poll_votes (poll_id, option_id, user_id, voted_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(poll_id, user_id) DO UPDATE SET option_id = excluded.option_id, voted_at = CURRENT_TIMESTAMP
+  `).run(poll.id, option.id, req.user.id);
+
+  // Manda o resultado atualizado (com nomes de quem votou) pra quem esta com
+  // a turma aberta agora, sem precisar recarregar.
+  io.to('turma_' + req.turmaId).emit('poll_vote_update', {
+    turmaId: req.turmaId,
+    pollId: poll.id,
+    poll: getPollPayload(poll.id, null) // "null" so pra reaproveitar a funcao; myOptionId nao e usado aqui
+  });
+  res.json({ ok: true, poll: getPollPayload(poll.id, req.user.id) });
 });
 
 // Apaga (soft delete) uma mensagem da turma: quem enviou, a professora regente ou a direcao
@@ -978,6 +1209,71 @@ app.delete('/api/messages/:id', requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 // Mensagens privadas (conversas 1:1) - responsaveis <-> equipe, nunca pai <-> pai
 // ---------------------------------------------------------------------------
+
+// Acha a conversa entre duas pessoas ou cria uma nova, se ainda nao existir.
+function findOrCreateConversation(userIdA, userIdB) {
+  const a = Math.min(userIdA, userIdB);
+  const b = Math.max(userIdA, userIdB);
+  let conv = db.prepare('SELECT * FROM conversations WHERE user_a_id = ? AND user_b_id = ?').get(a, b);
+  if (!conv) {
+    const info = db.prepare('INSERT INTO conversations (user_a_id, user_b_id) VALUES (?, ?)').run(a, b);
+    conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(info.lastInsertRowid);
+  }
+  return conv;
+}
+
+// Cria uma mensagem privada e cuida de tudo que precisa acontecer depois:
+// avisar quem esta com a conversa aberta (Socket.IO), notificar push/numero
+// de nao lidas quem nao esta vendo agora, e marcar que quem enviou "leu" a
+// propria mensagem. Usado tanto pelo envio normal quanto pelo "encaminhar".
+function createDmMessage(conversationId, senderId, content, attachmentId) {
+  const info = db.prepare(
+    'INSERT INTO dm_messages (conversation_id, sender_id, content, attachment_id) VALUES (?, ?, ?, ?)'
+  ).run(conversationId, senderId, content || null, attachmentId || null);
+
+  const row = db.prepare(`
+    SELECT m.*, u.name as sender_name, u.role as sender_role, u.avatar_filename as sender_avatar,
+           a.id as att_id, a.kind as att_kind, a.original_name as att_name
+    FROM dm_messages m
+    JOIN users u ON u.id = m.sender_id
+    LEFT JOIN attachments a ON a.id = m.attachment_id
+    WHERE m.id = ?
+  `).get(info.lastInsertRowid);
+
+  const payload = {
+    id: row.id,
+    conversationId,
+    content: row.content,
+    createdAt: row.created_at,
+    user: {
+      id: row.sender_id, name: row.sender_name, role: row.sender_role, roleLabel: ROLE_LABELS[row.sender_role],
+      avatarUrl: row.sender_avatar ? `/api/avatar/${row.sender_id}` : null
+    },
+    attachment: row.att_id ? { id: row.att_id, kind: row.att_kind, name: row.att_name } : null,
+    deleted: false,
+    canDelete: true,
+    seenByOther: false
+  };
+
+  io.to('conv_' + conversationId).emit('new_dm_message', payload);
+
+  const convRow = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversationId);
+  if (convRow) {
+    const otherId = convRow.user_a_id === senderId ? convRow.user_b_id : convRow.user_a_id;
+    const viewingNow = getUserIdsInRoom('conv_' + conversationId);
+    if (!viewingNow.has(otherId)) {
+      sendPushToUsers([otherId], {
+        title: row.sender_name,
+        body: row.content ? row.content : `Enviou ${row.att_kind === 'pdf' ? 'um PDF' : 'uma foto'}`,
+        url: `/?openConversation=${conversationId}`
+      });
+      io.to('user_' + otherId).emit('unread_bump', { kind: 'conversation', id: conversationId });
+    }
+  }
+  markConversationRead(conversationId, senderId);
+
+  return payload;
+}
 
 // Lista de pessoas com quem o usuario logado tem permissao de iniciar uma conversa nova
 app.get('/api/conversations/contacts', requireAuth, (req, res) => {
@@ -1072,13 +1368,7 @@ app.post('/api/conversations', requireAuth, (req, res) => {
   if (!canStartConversation(req.user, other)) {
     return res.status(403).json({ error: 'Voce nao pode iniciar uma conversa com esta pessoa' });
   }
-  const a = Math.min(req.user.id, otherId);
-  const b = Math.max(req.user.id, otherId);
-  let conv = db.prepare('SELECT * FROM conversations WHERE user_a_id = ? AND user_b_id = ?').get(a, b);
-  if (!conv) {
-    const info = db.prepare('INSERT INTO conversations (user_a_id, user_b_id) VALUES (?, ?)').run(a, b);
-    conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(info.lastInsertRowid);
-  }
+  const conv = findOrCreateConversation(req.user.id, otherId);
   res.json({
     conversation: {
       id: conv.id,
@@ -1152,53 +1442,7 @@ app.post('/api/conversations/:id/messages', requireAuth, requireConversationPart
       return res.status(400).json({ error: 'Anexo invalido para esta conversa' });
     }
   }
-  const info = db.prepare(
-    'INSERT INTO dm_messages (conversation_id, sender_id, content, attachment_id) VALUES (?, ?, ?, ?)'
-  ).run(req.conversationId, req.user.id, content ? content.trim() : null, attachmentId || null);
-
-  const row = db.prepare(`
-    SELECT m.*, u.name as sender_name, u.role as sender_role, u.avatar_filename as sender_avatar,
-           a.id as att_id, a.kind as att_kind, a.original_name as att_name
-    FROM dm_messages m
-    JOIN users u ON u.id = m.sender_id
-    LEFT JOIN attachments a ON a.id = m.attachment_id
-    WHERE m.id = ?
-  `).get(info.lastInsertRowid);
-
-  const payload = {
-    id: row.id,
-    conversationId: req.conversationId,
-    content: row.content,
-    createdAt: row.created_at,
-    user: {
-      id: row.sender_id, name: row.sender_name, role: row.sender_role, roleLabel: ROLE_LABELS[row.sender_role],
-      avatarUrl: row.sender_avatar ? `/api/avatar/${row.sender_id}` : null
-    },
-    attachment: row.att_id ? { id: row.att_id, kind: row.att_kind, name: row.att_name } : null,
-    deleted: false,
-    canDelete: true,
-    seenByOther: false
-  };
-
-  io.to('conv_' + req.conversationId).emit('new_dm_message', payload);
-
-  // Notifica push a outra pessoa da conversa, exceto se ela ja esta com essa
-  // conversa aberta na tela agora.
-  const convRow = db.prepare('SELECT * FROM conversations WHERE id = ?').get(req.conversationId);
-  if (convRow) {
-    const otherId = convRow.user_a_id === req.user.id ? convRow.user_b_id : convRow.user_a_id;
-    const viewingNow = getUserIdsInRoom('conv_' + req.conversationId);
-    if (!viewingNow.has(otherId)) {
-      sendPushToUsers([otherId], {
-        title: row.sender_name,
-        body: row.content ? row.content : `Enviou ${row.att_kind === 'pdf' ? 'um PDF' : 'uma foto'}`,
-        url: `/?openConversation=${req.conversationId}`
-      });
-      io.to('user_' + otherId).emit('unread_bump', { kind: 'conversation', id: req.conversationId });
-    }
-  }
-  markConversationRead(req.conversationId, req.user.id);
-
+  const payload = createDmMessage(req.conversationId, req.user.id, content ? content.trim() : null, attachmentId || null);
   res.json({ message: payload });
 });
 
@@ -1267,6 +1511,24 @@ app.post('/api/cardapio', requireAuth, requireRole(...CARDAPIO_ROLES), (req, res
   const row = db.prepare(`
     SELECT c.*, u.name as author_name FROM cardapio c JOIN users u ON u.id = c.created_by WHERE c.id = ?
   `).get(info.lastInsertRowid);
+  res.json({ item: row });
+});
+
+// Editar um item ja existente (corrigir data/refeicao/descricao). Restrito a
+// um grupo especifico que "administra" o cardapio, independente de quem
+// criou o item originalmente (Gestor sempre passa via requireRole).
+app.put('/api/cardapio/:id', requireAuth, requireRole(...CARDAPIO_EDIT_ROLES), (req, res) => {
+  const item = db.prepare('SELECT * FROM cardapio WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Nao encontrado' });
+  const { date, mealType, description } = req.body;
+  if (!date || !mealType || !description || !description.trim()) {
+    return res.status(400).json({ error: 'Preencha data, refeicao e descricao' });
+  }
+  db.prepare('UPDATE cardapio SET date = ?, meal_type = ?, description = ? WHERE id = ?')
+    .run(date, mealType, description.trim(), item.id);
+  const row = db.prepare(`
+    SELECT c.*, u.name as author_name FROM cardapio c JOIN users u ON u.id = c.created_by WHERE c.id = ?
+  `).get(item.id);
   res.json({ item: row });
 });
 

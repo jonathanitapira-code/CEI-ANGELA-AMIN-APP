@@ -329,3 +329,43 @@ form { margin: 0; }
   .view { padding: 10px; }
   .fin-totals { grid-template-columns: 1fr; }
 }
+
+/* ---------- Responder mensagem (reply) ---------- */
+.reply-preview {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; background: #f6f7f9; border-top: 1px solid var(--border);
+}
+.reply-preview-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.reply-preview-label { font-size: 11px; color: var(--red); font-weight: 600; }
+.reply-preview-snippet {
+  font-size: 12px; color: var(--gray-light);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.reply-preview .icon-btn { width: 30px; height: 30px; font-size: 13px; }
+
+.reply-quote {
+  border-left: 3px solid var(--red); background: rgba(209,59,46,.06);
+  border-radius: 6px; padding: 4px 8px; margin-bottom: 6px; font-size: 12px;
+}
+.reply-quote b { display: block; color: var(--red); font-size: 11px; }
+.reply-quote span { display: block; color: var(--gray-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Enquete (poll) ---------- */
+.poll-box {
+  background: #f9f9fa; border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; min-width: 220px; max-width: 280px;
+}
+.poll-question { font-weight: 600; font-size: 13px; color: var(--gray); margin-bottom: 8px; }
+.poll-option {
+  display: block; width: 100%; text-align: left; background: #fff; border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 8px; margin-bottom: 6px; cursor: pointer;
+}
+.poll-option:last-of-type { margin-bottom: 0; }
+.poll-option.selected { border-color: var(--red); background: #fff5f4; }
+.poll-option-row { display: flex; justify-content: space-between; gap: 6px; font-size: 13px; color: var(--gray); }
+.poll-option-count { font-weight: 600; color: var(--gray-light); font-size: 12px; }
+.poll-bar { height: 5px; background: var(--border); border-radius: 4px; margin-top: 5px; overflow: hidden; }
+.poll-bar-fill { height: 100%; background: var(--red); border-radius: 4px; }
+.poll-voters { font-size: 10px; color: var(--gray-light); margin-top: 4px; white-space: normal; }
+.poll-total { font-size: 11px; color: var(--gray-light); margin-top: 6px; text-align: right; }
+.poll-option-input { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-family: inherit; }

@@ -9,10 +9,13 @@
   const TURMA_CREATE_ROLES = ['gestor'];
   const CARDAPIO_ROLES = ['cozinha', 'professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'gestor'];
   const CARDAPIO_ADMIN_ROLES = ['diretora', 'coordenadora_pedagogica', 'gestor'];
+  const CARDAPIO_EDIT_ROLES = ['cozinha', 'secretaria', 'coordenadora_pedagogica', 'gestor'];
   const FIN_MANAGE_ROLES = ['diretora', 'gestor', 'secretaria'];
   const FIN_DELETE_ROLES = ['diretora', 'gestor'];
   const DIRECAO_ROLES = ['diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
   const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica', 'gestor'];
+  const FORWARD_TARGET_ROLES = ['professora_regente', 'secretaria', 'coordenadora_pedagogica', 'diretora', 'gestor'];
+  const POLL_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
 
   const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios'];
 
@@ -24,7 +27,9 @@
     socket: null,
     inviteCode: null,
     inviteTurmaName: null,
-    calMonth: new Date() // mes atualmente exibido no calendario (dia nao importa)
+    calMonth: new Date(), // mes atualmente exibido no calendario (dia nao importa)
+    replyingTo: null, // { id, authorName, snippet } - mensagem da turma que estou respondendo
+    myPollVotes: {} // pollId -> optionId que eu escolhi (cache local pra nao perder o "selecionado" em updates ao vivo)
   };
 
   // ------------------------------------------------------------------
@@ -464,6 +469,10 @@
         applyConversationReadUpdate(info);
       }
     });
+    // Alguem votou (ou trocou o voto) numa enquete da turma aberta - atualiza ao vivo
+    state.socket.on('poll_vote_update', (info) => {
+      applyPollVoteUpdate(info);
+    });
   }
 
   function applyTurmaReadUpdate({ userId, userName }) {
@@ -586,12 +595,15 @@
   // ------------------------------------------------------------------
   async function openChat(turma) {
     state.chat = { type: 'turma', id: turma.id, name: turma.name, inviteCode: turma.invite_code };
+    state.replyingTo = null;
+    hideReplyPreview();
     document.getElementById('view-chat').classList.remove('hidden');
     NAV_VIEWS.forEach(v => document.getElementById('view-' + v).classList.add('hidden'));
     document.querySelector('.nav-tabs').classList.add('hidden');
     document.getElementById('chat-turma-name').innerHTML = escapeHtml(turma.name);
     document.getElementById('btn-invite').classList.remove('hidden');
     document.getElementById('btn-members').classList.remove('hidden');
+    document.getElementById('btn-poll').classList.toggle('hidden', !POLL_CREATE_ROLES.includes(state.user.role));
     document.getElementById('chat-messages').innerHTML = '';
 
     state.socket.emit('join_turma', turma.id);
@@ -699,9 +711,20 @@
 
   function appendMessage(msg) {
     const mine = msg.user.id === state.user.id;
+    const isTurma = state.chat && state.chat.type === 'turma';
     const wrap = el(`<div class="msg ${mine ? 'mine' : ''}" data-msg-id="${msg.id}"></div>`);
     const meta = el(`<div class="meta"></div>`);
     meta.innerHTML = `${avatarHtml(msg.user, 'small')} <b>${escapeHtml(msg.user.name)}</b> ${roleBadge(msg.user.role, msg.user.roleLabel)} <span>${fmtDateTime(msg.createdAt)}</span>`;
+    if (isTurma && !msg.deleted) {
+      const replyBtn = el(`<button class="msg-del" title="Responder">↩️</button>`);
+      replyBtn.addEventListener('click', () => startReplyTo(msg));
+      meta.appendChild(replyBtn);
+      if (msg.content) {
+        const fwdBtn = el(`<button class="msg-del" title="Encaminhar">↪️</button>`);
+        fwdBtn.addEventListener('click', () => openForwardModal(msg));
+        meta.appendChild(fwdBtn);
+      }
+    }
     if (msg.canDelete) {
       const delBtn = el(`<button class="msg-del" title="Apagar mensagem para todos">🗑</button>`);
       delBtn.addEventListener('click', () => deleteMessage(msg.id));
@@ -719,6 +742,15 @@
       bubble.classList.add('deleted');
       bubble.textContent = msg.deletedByName ? `Mensagem removida por ${msg.deletedByName}` : 'Mensagem removida';
     } else {
+      if (msg.replyTo) {
+        const quote = el(`<div class="reply-quote"></div>`);
+        quote.innerHTML = `<b>${escapeHtml(msg.replyTo.authorName || '')}</b><span>${escapeHtml(msg.replyTo.snippet || '')}</span>`;
+        bubble.appendChild(quote);
+      }
+      if (msg.poll) {
+        if (msg.poll.myOptionId != null) state.myPollVotes[msg.poll.id] = msg.poll.myOptionId;
+        bubble.appendChild(renderPollWidget(msg.poll));
+      }
       if (msg.content) {
         const p = document.createElement('div');
         p.textContent = msg.content;
@@ -753,6 +785,157 @@
     }
 
     document.getElementById('chat-messages').appendChild(wrap);
+  }
+
+  // ------------------------------------------------------------------
+  // Responder mensagem (reply)
+  // ------------------------------------------------------------------
+  function startReplyTo(msg) {
+    let snippet = msg.content ? msg.content : (msg.attachment ? '📎 Anexo' : (msg.poll ? '📊 Enquete: ' + msg.poll.question : ''));
+    if (snippet.length > 120) snippet = snippet.slice(0, 120) + '…';
+    state.replyingTo = { id: msg.id, authorName: msg.user.name, snippet };
+    document.getElementById('reply-preview-name').textContent = msg.user.name;
+    document.getElementById('reply-preview-snippet').textContent = snippet;
+    document.getElementById('reply-preview').classList.remove('hidden');
+    document.getElementById('chat-text').focus();
+  }
+
+  function hideReplyPreview() {
+    const el2 = document.getElementById('reply-preview');
+    if (el2) el2.classList.add('hidden');
+  }
+
+  document.getElementById('btn-cancel-reply').addEventListener('click', () => {
+    state.replyingTo = null;
+    hideReplyPreview();
+  });
+
+  // ------------------------------------------------------------------
+  // Encaminhar mensagem da turma
+  // ------------------------------------------------------------------
+  async function openForwardModal(msg) {
+    let targets = [];
+    try {
+      const data = await api(`/api/turmas/${state.chat.id}/forward-targets`);
+      targets = data.targets;
+    } catch (err) {
+      alert('Erro ao carregar lista de pessoas: ' + err.message);
+      return;
+    }
+    const rows = targets.map(t => `
+      <div class="member-row contact-row" data-user-id="${t.id}" style="cursor:pointer">
+        ${avatarHtml(t)}
+        ${roleBadge(t.role, t.roleLabel)}
+        <div><div class="name">${escapeHtml(t.name)}</div></div>
+      </div>`).join('');
+    const modal = openModal(`
+      <h3>Encaminhar mensagem</h3>
+      <p style="font-size:13px;color:#666">Escolha para quem encaminhar esta mensagem como mensagem privada.</p>
+      <div>${rows || '<p>Nenhuma pessoa disponivel para encaminhar no momento.</p>'}</div>
+      <div class="error-msg" id="forward-error"></div>
+      <div class="modal-actions"><button class="btn secondary" id="cancel-forward">Fechar</button></div>
+    `);
+    document.getElementById('cancel-forward').addEventListener('click', closeModal);
+    modal.querySelectorAll('.contact-row').forEach(row => {
+      row.addEventListener('click', async () => {
+        const toUserId = Number(row.dataset.userId);
+        try {
+          await api(`/api/turmas/${state.chat.id}/messages/${msg.id}/forward`, { method: 'POST', body: { toUserId } });
+          closeModal();
+        } catch (err) {
+          document.getElementById('forward-error').textContent = err.message;
+        }
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Enquetes na turma
+  // ------------------------------------------------------------------
+  document.getElementById('btn-poll').addEventListener('click', () => {
+    if (!state.chat || state.chat.type !== 'turma') return;
+    openPollModal();
+  });
+
+  function openPollModal() {
+    const modal = openModal(`
+      <h3>Criar enquete</h3>
+      <div class="field"><label>Pergunta</label><input type="text" id="poll-question" placeholder="Ex: Qual dia da excursao?" /></div>
+      <div class="field"><label>Opcoes</label>
+        <div id="poll-options-wrap">
+          <input type="text" class="poll-option-input" placeholder="Opcao 1" style="margin-bottom:6px" />
+          <input type="text" class="poll-option-input" placeholder="Opcao 2" style="margin-bottom:6px" />
+        </div>
+        <button type="button" class="btn ghost" id="btn-add-poll-option" style="font-size:12px;padding:4px 10px">+ Adicionar opcao</button>
+      </div>
+      <div class="error-msg" id="poll-error"></div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="cancel-poll">Cancelar</button>
+        <button class="btn" id="confirm-poll">Criar enquete</button>
+      </div>
+    `);
+    document.getElementById('btn-add-poll-option').addEventListener('click', () => {
+      const wrap = document.getElementById('poll-options-wrap');
+      if (wrap.querySelectorAll('.poll-option-input').length >= 8) return;
+      const input = el(`<input type="text" class="poll-option-input" placeholder="Opcao ${wrap.querySelectorAll('.poll-option-input').length + 1}" style="margin-bottom:6px" />`);
+      wrap.appendChild(input);
+    });
+    document.getElementById('cancel-poll').addEventListener('click', closeModal);
+    document.getElementById('confirm-poll').addEventListener('click', async () => {
+      const question = document.getElementById('poll-question').value.trim();
+      const options = Array.from(document.querySelectorAll('.poll-option-input'))
+        .map(i => i.value.trim())
+        .filter(Boolean);
+      try {
+        await api(`/api/turmas/${state.chat.id}/polls`, { method: 'POST', body: { question, options } });
+        closeModal();
+      } catch (err) {
+        document.getElementById('poll-error').textContent = err.message;
+      }
+    });
+  }
+
+  function renderPollWidget(poll) {
+    const myOptionId = state.myPollVotes.hasOwnProperty(poll.id) ? state.myPollVotes[poll.id] : poll.myOptionId;
+    const box = el(`<div class="poll-box" data-poll-id="${poll.id}"></div>`);
+    const q = el(`<div class="poll-question"></div>`);
+    q.textContent = '📊 ' + poll.question;
+    box.appendChild(q);
+    poll.options.forEach(opt => {
+      const pct = poll.totalVotes ? Math.round((opt.count / poll.totalVotes) * 100) : 0;
+      const optBtn = el(`<button type="button" class="poll-option${opt.id === myOptionId ? ' selected' : ''}" data-option-id="${opt.id}"></button>`);
+      optBtn.innerHTML = `
+        <div class="poll-option-row"><span class="poll-option-text">${escapeHtml(opt.text)}</span><span class="poll-option-count">${opt.count}</span></div>
+        <div class="poll-bar"><div class="poll-bar-fill" style="width:${pct}%"></div></div>
+        ${opt.voters && opt.voters.length ? `<div class="poll-voters">${opt.voters.map(escapeHtml).join(', ')}</div>` : ''}
+      `;
+      optBtn.addEventListener('click', () => voteInPoll(poll.id, opt.id));
+      box.appendChild(optBtn);
+    });
+    const total = el(`<div class="poll-total"></div>`);
+    total.textContent = poll.totalVotes + (poll.totalVotes === 1 ? ' voto' : ' votos');
+    box.appendChild(total);
+    return box;
+  }
+
+  async function voteInPoll(pollId, optionId) {
+    if (!state.chat || state.chat.type !== 'turma') return;
+    try {
+      const data = await api(`/api/turmas/${state.chat.id}/polls/${pollId}/vote`, { method: 'POST', body: { optionId } });
+      state.myPollVotes[pollId] = optionId;
+      const box = document.querySelector(`.poll-box[data-poll-id="${pollId}"]`);
+      if (box && data.poll) box.replaceWith(renderPollWidget(data.poll));
+    } catch (err) {
+      alert('Erro ao votar: ' + err.message);
+    }
+  }
+
+  function applyPollVoteUpdate(data) {
+    if (!state.chat || state.chat.type !== 'turma' || state.chat.id !== data.turmaId) return;
+    const box = document.querySelector(`.poll-box[data-poll-id="${data.pollId}"]`);
+    if (!box) return;
+    const fresh = renderPollWidget(data.poll);
+    box.replaceWith(fresh);
   }
 
   function markMessageDeleted(id, deletedByName) {
@@ -824,14 +1007,17 @@
         const up = await api(`${base}/attachments`, { method: 'POST', body: fd });
         attachmentId = up.attachmentId;
       }
-      await api(`${base}/messages`, {
-        method: 'POST',
-        body: { content: text, attachmentId }
-      });
+      const body = { content: text, attachmentId };
+      if (state.chat.type === 'turma' && state.replyingTo) {
+        body.replyToMessageId = state.replyingTo.id;
+      }
+      await api(`${base}/messages`, { method: 'POST', body });
       chatText.value = '';
       pendingFile = null;
       fileInput.value = '';
       document.getElementById('btn-attach').textContent = '📎';
+      state.replyingTo = null;
+      hideReplyPreview();
     } catch (err) {
       alert('Erro ao enviar: ' + err.message);
     }
@@ -926,6 +1112,8 @@
 
   async function openConversation(conv) {
     state.chat = { type: 'conversation', id: conv.id, name: conv.other.name };
+    state.replyingTo = null;
+    hideReplyPreview();
     document.getElementById('view-chat').classList.remove('hidden');
     NAV_VIEWS.forEach(v => document.getElementById('view-' + v).classList.add('hidden'));
     document.querySelector('.nav-tabs').classList.add('hidden');
@@ -933,6 +1121,7 @@
       `${avatarHtml(conv.other, 'small')} ${escapeHtml(conv.other.name)} ${roleBadge(conv.other.role, conv.other.roleLabel)}`;
     document.getElementById('btn-invite').classList.add('hidden');
     document.getElementById('btn-members').classList.add('hidden');
+    document.getElementById('btn-poll').classList.add('hidden');
     document.getElementById('chat-messages').innerHTML = '';
 
     state.socket.emit('join_conversation', conv.id);
@@ -966,12 +1155,16 @@
     }
     data.cardapio.forEach(item => {
       const canDelete = item.created_by === state.user.id || CARDAPIO_ADMIN_ROLES.includes(state.user.role);
+      const canEdit = CARDAPIO_EDIT_ROLES.includes(state.user.role);
       const card = el(`<div class="meal-card">
         <div class="meal-type">${escapeHtml(item.meal_type)}</div>
         <div class="meal-desc">${escapeHtml(item.description)}</div>
         <div class="meal-foot">
           <span>Publicado por ${escapeHtml(item.author_name)}</span>
-          ${canDelete ? '<button class="btn ghost" style="padding:2px 8px;font-size:11px" data-del="' + item.id + '">remover</button>' : ''}
+          <span>
+            ${canEdit ? '<button class="btn ghost" style="padding:2px 8px;font-size:11px" data-edit="' + item.id + '">editar</button>' : ''}
+            ${canDelete ? '<button class="btn ghost" style="padding:2px 8px;font-size:11px" data-del="' + item.id + '">remover</button>' : ''}
+          </span>
         </div>
       </div>`);
       const delBtn = card.querySelector('[data-del]');
@@ -979,19 +1172,24 @@
         try { await api('/api/cardapio/' + item.id, { method: 'DELETE' }); loadCardapio(); }
         catch (err) { alert(err.message); }
       });
+      const editBtn = card.querySelector('[data-edit]');
+      if (editBtn) editBtn.addEventListener('click', () => openMealModal(item));
       list.appendChild(card);
     });
   }
 
-  document.getElementById('btn-new-meal').addEventListener('click', () => {
-    const date = document.getElementById('cardapio-date').value || todayStr();
+  document.getElementById('btn-new-meal').addEventListener('click', () => openMealModal(null));
+
+  function openMealModal(existingItem) {
+    const isEdit = !!existingItem;
+    const date = isEdit ? existingItem.date : (document.getElementById('cardapio-date').value || todayStr());
     openModal(`
-      <h3>Adicionar refeicao</h3>
+      <h3>${isEdit ? 'Editar refeicao' : 'Adicionar refeicao'}</h3>
       <div class="field"><label>Data</label><input type="date" id="meal-date" value="${date}" /></div>
       <div class="field"><label>Refeicao</label>
-        <select id="meal-type">${MEAL_TYPES.map(m => `<option>${m}</option>`).join('')}</select>
+        <select id="meal-type">${MEAL_TYPES.map(m => `<option${isEdit && m === existingItem.meal_type ? ' selected' : ''}>${m}</option>`).join('')}</select>
       </div>
-      <div class="field"><label>O que foi oferecido</label><textarea id="meal-desc" rows="3" placeholder="Ex: Arroz, feijao, frango grelhado, salada e suco de laranja"></textarea></div>
+      <div class="field"><label>O que foi oferecido</label><textarea id="meal-desc" rows="3" placeholder="Ex: Arroz, feijao, frango grelhado, salada e suco de laranja">${isEdit ? escapeHtml(existingItem.description) : ''}</textarea></div>
       <div class="error-msg" id="meal-error"></div>
       <div class="modal-actions">
         <button class="btn secondary" id="cancel-meal">Cancelar</button>
@@ -1001,22 +1199,24 @@
     document.getElementById('cancel-meal').addEventListener('click', closeModal);
     document.getElementById('confirm-meal').addEventListener('click', async () => {
       try {
-        await api('/api/cardapio', {
-          method: 'POST',
-          body: {
-            date: document.getElementById('meal-date').value,
-            mealType: document.getElementById('meal-type').value,
-            description: document.getElementById('meal-desc').value
-          }
-        });
+        const body = {
+          date: document.getElementById('meal-date').value,
+          mealType: document.getElementById('meal-type').value,
+          description: document.getElementById('meal-desc').value
+        };
+        if (isEdit) {
+          await api('/api/cardapio/' + existingItem.id, { method: 'PUT', body });
+        } else {
+          await api('/api/cardapio', { method: 'POST', body });
+        }
         closeModal();
-        document.getElementById('cardapio-date').value = document.getElementById('meal-date').value;
+        document.getElementById('cardapio-date').value = body.date;
         loadCardapio();
       } catch (err) {
         document.getElementById('meal-error').textContent = err.message;
       }
     });
-  });
+  }
 
   // ------------------------------------------------------------------
   // Financeiro

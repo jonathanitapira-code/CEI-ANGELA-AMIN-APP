@@ -32,6 +32,10 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Excluir conversa privada**: na aba "Mensagens", cada conversa tem um ícone 🗑 para excluí-la — some só da sua lista; a outra pessoa continua vendo a conversa normalmente. Se ela mandar uma mensagem nova depois, a conversa reaparece pra você (só com as mensagens novas, as antigas continuam escondidas).
 - **Apagar mensagem privada só para mim**: dentro de uma conversa privada, toda mensagem tem um ícone 🙈 "Apagar somente para mim" — funciona em qualquer mensagem (sua ou da outra pessoa) e some só da sua tela. É diferente do 🗑 "Apagar para todos", que continua existindo só nas suas próprias mensagens e apaga pra ambos.
 - **Calendário escolar**: nova aba "Calendário" com uma visão de mês. Fins de semana e feriados nacionais (Carnaval, Sexta-feira Santa, Tiradentes, Corpus Christi, Independência, etc.) aparecem destacados automaticamente, calculados certinho ano a ano — inclusive o feriado municipal de **8 de dezembro** (Nossa Senhora da Conceição, padroeira de Imbituba). Diretora, Secretária e Estagiária/Professoras só visualizam; **somente Gestor e Coordenadora Pedagógica podem adicionar, editar ou excluir eventos** (reunião de pais, festa da família, arraiá cultural, entrega de portfólios etc.) clicando em qualquer dia do calendário.
+- **Editar item do cardápio**: além de Diretora/Coordenadora Pedagógica/Gestor (que já podiam remover qualquer item), agora **Cozinha, Secretária e Coordenadora Pedagógica** também podem clicar em "editar" em qualquer item do cardápio (mesmo criado por outra pessoa) para corrigir data, refeição ou descrição, sem precisar excluir e recriar.
+- **Encaminhar mensagem da turma**: toda mensagem de texto no chat da turma agora tem um botão ↪️ "Encaminhar". Quem usa escolhe uma pessoa entre Professora Regente, Secretária, Coordenadora Pedagógica, Diretora ou Gestor, e a mensagem é enviada como conversa privada para essa pessoa (com uma legenda avisando de qual turma e de quem é a mensagem original). Só funciona com mensagens de texto (anexos não podem ser encaminhados por aqui).
+- **Responder mensagem na turma**: toda mensagem no chat da turma tem um botão ↩️ "Responder" — a mensagem nova aparece com uma citação da original acima dela (nome de quem escreveu + um resuminho do texto), igual a apps de mensagem comuns. Há um botão para cancelar a resposta antes de enviar.
+- **Enquete na turma**: Professora Regente, Professora Auxiliar, Estagiária e qualquer pessoa da Direção (Diretora, Coordenadora Pedagógica, Secretária, Gestor) podem clicar em "📊 Enquete" dentro de uma turma para criar uma pergunta com até 8 opções. Qualquer participante da turma vota uma vez (votar de novo troca o voto anterior, não soma dois votos) e **todo mundo da turma vê, em tempo real, quantos votos cada opção tem e o nome de quem votou em cada uma** — nada de voto anônimo aqui.
 
 ## 📲 Instalar como aplicativo no celular
 
@@ -74,6 +78,8 @@ O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas fo
 **Sobre a atualização do calendário escolar**: adiciona uma tabela nova (`calendar_events`) — também **não apaga nem exige recadastro de ninguém**.
 
 **Sobre a atualização de "excluir conversa" e "apagar só para mim"**: adiciona uma tabela nova (`dm_message_hidden`) — também **não apaga nem exige recadastro de ninguém**.
+
+**Sobre a atualização de "editar cardápio", "encaminhar", "responder" e "enquete"**: adiciona duas colunas novas na tabela de mensagens (`reply_to_message_id`, `poll_id`) e três tabelas novas (`polls`, `poll_options`, `poll_votes`) — também **não apaga nem exige recadastro de ninguém**.
 
 ## Como rodar localmente
 
@@ -171,12 +177,19 @@ uploads/
 | Publicar cardápio               | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Ver cardápio                    | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Remover item do cardápio de outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| Editar item do cardápio de outra pessoa | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Lançar receita/despesa          | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ |
 | Ver financeiro (incl. relatório mensal) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Excluir lançamento financeiro   | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ |
 | Redefinir senha de outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Alterar papel / excluir outra pessoa | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Adicionar/editar/excluir evento no calendário | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ✅ |
+| Encaminhar mensagem da turma (para direção/regente) | ✅* | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Responder mensagem no chat da turma | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Criar enquete na turma          | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Votar em enquete da turma       | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+\* Encaminhar mensagem: qualquer membro da turma pode encaminhar, mas só para quem ele já teria permissão de mandar mensagem privada (ex: um Responsável só encaminha para a Professora Regente se ela for da turma do filho dele; para a Direção sempre pode).
 
 Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi adicionada por quem gerencia a turma).
 
@@ -201,5 +214,4 @@ Achou alguma dessas regras diferente do que sua creche precisa? É só pedir —
 
 - Sessões ficam em memória: reiniciar o servidor derruba todo mundo logado. Para produção com mais uso, trocar por um "session store" persistente (ex. `connect-sqlite3`) é recomendado.
 - Não há recuperação de senha por e-mail (seria o próximo passo natural).
-- Não há envio de notificação push quando chega mensagem nova — é preciso abrir o app.
 - Bloqueio de download de fotos/PDFs é "best effort" (explicado acima).
