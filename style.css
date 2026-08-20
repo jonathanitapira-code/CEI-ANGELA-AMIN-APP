@@ -183,6 +183,18 @@ button {
   padding: 16px;
   cursor: pointer;
   transition: box-shadow .15s;
+  position: relative;
+}
+.turma-card-admin-actions { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; }
+.icon-btn-sm {
+  background: rgba(255,255,255,.9); border: 1px solid var(--border); border-radius: 6px;
+  width: 26px; height: 26px; font-size: 12px; display: flex; align-items: center; justify-content: center;
+  opacity: .6;
+}
+.icon-btn-sm:hover { opacity: 1; }
+.audit-note {
+  font-size: 12px; color: var(--gray-light); text-align: center;
+  padding: 10px 16px; background: #f6f7f9; border-top: 1px solid var(--border);
 }
 .turma-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,.08); }
 .conversa-card { position: relative; }
@@ -322,6 +334,36 @@ table.fin-table td.amount-despesa { color: var(--red); font-weight: 600; }
 .viewer-body img { max-width: 95%; }
 .viewer-body canvas { max-width: 95%; box-shadow: 0 4px 20px rgba(0,0,0,.4); background: #fff; }
 .viewer-note { color: #ddd; font-size: 11px; text-align: center; padding: 4px 16px; }
+
+/* ---------- Recado (ciencia obrigatoria) ---------- */
+#recado-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 200;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.recado-card {
+  background: #fff; border-radius: 16px; padding: 28px 24px; width: 100%; max-width: 420px;
+  text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.3);
+}
+.recado-icon { font-size: 40px; margin-bottom: 6px; }
+.recado-card h3 { margin: 0 0 4px; color: var(--gray); }
+.recado-author { font-size: 12px; color: var(--gray-light); margin: 0 0 14px; }
+.recado-message {
+  font-size: 15px; color: var(--gray); white-space: pre-wrap; text-align: left;
+  background: #f6f7f9; border-radius: 10px; padding: 14px; margin-bottom: 18px; max-height: 40vh; overflow: auto;
+}
+
+/* ---------- Recados (tela de gestao) ---------- */
+.recado-card-admin {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px;
+}
+.recado-card-admin.canceled { opacity: .55; }
+.recado-card-admin .recado-admin-msg { font-size: 14px; color: var(--gray); white-space: pre-wrap; margin-bottom: 8px; }
+.recado-card-admin .recado-admin-meta { font-size: 12px; color: var(--gray-light); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
+.recado-admin-progress { font-weight: 600; color: var(--red); }
+.acks-list { max-height: 300px; overflow: auto; margin: 10px 0; }
+.acks-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.acks-row .ack-yes { color: var(--green); font-weight: 600; }
+.acks-row .ack-no { color: var(--gray-light); }
 
 form { margin: 0; }
 

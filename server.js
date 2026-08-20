@@ -253,6 +253,28 @@ CREATE TABLE IF NOT EXISTS poll_votes (
   voted_at TEXT DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (poll_id, user_id)
 );
+
+-- Recados da Direcao: aparecem em tela cheia assim que a pessoa abre o app e
+-- so somem depois que ela clica em "Dar ciencia". audience_type = 'all'
+-- (todo mundo) ou 'turma' (so quem esta naquela turma especifica).
+CREATE TABLE IF NOT EXISTS announcements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message TEXT NOT NULL,
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  audience_type TEXT NOT NULL DEFAULT 'all' CHECK(audience_type IN ('all','turma')),
+  turma_id INTEGER REFERENCES turmas(id),
+  canceled_at TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Quem ja deu ciencia de qual recado (PRIMARY KEY garante uma confirmacao
+-- por pessoa por recado).
+CREATE TABLE IF NOT EXISTS announcement_acks (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  acked_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (announcement_id, user_id)
+);
 `);
 
 // Migracao segura para bancos que ja existiam antes da coluna "active" existir:
@@ -382,9 +404,6 @@ const ROLE_LABELS = {
 const ALL_ROLES = Object.keys(ROLE_LABELS);
 const STAFF_ROLES = ALL_ROLES.filter(r => r !== 'pai');
 
-// O Gestor tem acesso a tudo (superusuario) - so ele cria turma. As demais
-// permissoes abaixo continuam valendo para os outros cargos como ja estava.
-const TURMA_CREATE_ROLES = ['gestor'];
 // Quem pode publicar no cardapio
 const CARDAPIO_ROLES = ['cozinha', 'professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'gestor'];
 // Quem pode remover itens do cardapio criados por outra pessoa
@@ -398,6 +417,20 @@ const FIN_MANAGE_ROLES = ['diretora', 'gestor', 'secretaria'];
 const FIN_DELETE_ROLES = ['diretora', 'gestor'];
 // Direcao da creche - alcancavel em mensagem privada por qualquer responsavel
 const DIRECAO_ROLES = ['diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
+// Quem pode criar, editar (renomear) ou excluir definitivamente uma turma -
+// Gestor sempre pode (requireRole ja garante isso automaticamente); alem
+// dele, so a Direcao (Diretora, Coordenadora Pedagogica, Secretaria).
+const TURMA_MANAGE_ROLES = DIRECAO_ROLES;
+// Quem pode consultar (auditar) qualquer conversa privada, mesmo sem
+// participar dela - usado para a Direcao nao perder o "olho" da creche
+// sobre as conversas mesmo depois que a mensagem expira pro responsavel.
+const AUDIT_DM_ROLES = DIRECAO_ROLES;
+// Depois de quantos dias uma mensagem de conversa privada deixa de aparecer
+// para o responsavel (pai/mae) - a outra pessoa da conversa e a Direcao
+// continuam vendo normalmente.
+const DM_MESSAGE_LIFETIME_DAYS = 5;
+// Quem pode criar um recado com ciencia obrigatoria
+const RECADO_CREATE_ROLES = DIRECAO_ROLES;
 // Quem pode apagar mensagem de outra pessoa dentro do chat da turma
 const MODERACAO_TURMA_ROLES = ['professora_regente', ...DIRECAO_ROLES];
 // Quem pode editar o calendario escolar (criar/editar/excluir evento). O
@@ -448,6 +481,40 @@ function getPollPayload(pollId, forUserId) {
     })),
     totalVotes: votes.length,
     myOptionId: myVote ? myVote.option_id : null
+  };
+}
+
+// Quem precisa dar ciencia de um recado: todo mundo ativo (audience 'all')
+// ou so quem esta naquela turma (audience 'turma') - sempre menos quem criou
+// o recado, que nao precisa confirmar o proprio aviso.
+function getAnnouncementAudienceUserIds(announcement) {
+  let rows;
+  if (announcement.audience_type === 'turma' && announcement.turma_id) {
+    rows = db.prepare('SELECT user_id as id FROM turma_members WHERE turma_id = ?').all(announcement.turma_id);
+  } else {
+    rows = db.prepare('SELECT id FROM users WHERE active = 1').all();
+  }
+  return rows.map(r => r.id).filter(id => id !== announcement.created_by);
+}
+
+// Lista completa da audiencia de um recado com o status de ciencia de cada
+// pessoa - usado por quem criou o recado para acompanhar as confirmacoes.
+function getAnnouncementAcksPayload(announcement) {
+  const audienceIds = getAnnouncementAudienceUserIds(announcement);
+  const acks = db.prepare('SELECT user_id, acked_at FROM announcement_acks WHERE announcement_id = ?').all(announcement.id);
+  const ackMap = new Map(acks.map(a => [a.user_id, a.acked_at]));
+  const people = audienceIds.map((uid) => {
+    const u = db.prepare('SELECT id, name, role FROM users WHERE id = ?').get(uid);
+    if (!u) return null;
+    return {
+      id: u.id, name: u.name, roleLabel: ROLE_LABELS[u.role],
+      acked: ackMap.has(u.id), ackedAt: ackMap.get(u.id) || null
+    };
+  }).filter(Boolean).sort((a, b) => (a.acked === b.acked) ? a.name.localeCompare(b.name) : (a.acked ? 1 : -1));
+  return {
+    total: people.length,
+    ackedCount: people.filter(p => p.acked).length,
+    people
   };
 }
 
@@ -738,10 +805,21 @@ app.post('/api/push/unsubscribe', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Apaga um anexo (foto/PDF) de vez: tira o arquivo do disco e a linha do
+// banco. Usado tanto na exclusao de turma quanto na purga automatica de
+// mensagens antigas - e o que realmente libera espaco no disco do Render.
+function deleteAttachmentById(attachmentId) {
+  const att = db.prepare('SELECT * FROM attachments WHERE id = ?').get(attachmentId);
+  if (!att) return;
+  const filePath = path.join(UPLOAD_DIR, att.filename);
+  fs.unlink(filePath, () => {}); // silencioso: se o arquivo ja nao existir, tudo bem
+  db.prepare('DELETE FROM attachments WHERE id = ?').run(attachmentId);
+}
+
 // ---------------------------------------------------------------------------
 // Turmas
 // ---------------------------------------------------------------------------
-app.post('/api/turmas', requireAuth, requireRole(...TURMA_CREATE_ROLES), (req, res) => {
+app.post('/api/turmas', requireAuth, requireRole(...TURMA_MANAGE_ROLES), (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Informe o nome da turma' });
   const code = nanoid(8);
@@ -753,6 +831,48 @@ app.post('/api/turmas', requireAuth, requireRole(...TURMA_CREATE_ROLES), (req, r
   ).run(info.lastInsertRowid, req.user.id);
   const turma = db.prepare('SELECT * FROM turmas WHERE id = ?').get(info.lastInsertRowid);
   res.json({ turma });
+});
+
+// Renomeia uma turma (Gestor ou Direcao, mesmo sem ser membro dela).
+app.put('/api/turmas/:id', requireAuth, requireRole(...TURMA_MANAGE_ROLES), (req, res) => {
+  const turma = db.prepare('SELECT * FROM turmas WHERE id = ?').get(req.params.id);
+  if (!turma) return res.status(404).json({ error: 'Turma nao encontrada' });
+  const { name } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Informe o nome da turma' });
+  db.prepare('UPDATE turmas SET name = ? WHERE id = ?').run(name.trim(), turma.id);
+  const updated = db.prepare('SELECT * FROM turmas WHERE id = ?').get(turma.id);
+  io.to('turma_' + turma.id).emit('turma_renamed', { turmaId: turma.id, name: updated.name });
+  res.json({ turma: updated });
+});
+
+// Exclui uma turma DEFINITIVAMENTE - mensagens, anexos (inclusive os
+// arquivos no disco), enquetes e a lista de participantes somem junto.
+// Nao tem como desfazer, entao so Gestor/Direcao podem, mesmo sem ser
+// membros da turma.
+app.delete('/api/turmas/:id', requireAuth, requireRole(...TURMA_MANAGE_ROLES), (req, res) => {
+  const turma = db.prepare('SELECT * FROM turmas WHERE id = ?').get(req.params.id);
+  if (!turma) return res.status(404).json({ error: 'Turma nao encontrada' });
+
+  const messages = db.prepare('SELECT id, attachment_id, poll_id FROM messages WHERE turma_id = ?').all(turma.id);
+  const attachmentIds = messages.map(m => m.attachment_id).filter(Boolean);
+  const pollIds = messages.map(m => m.poll_id).filter(Boolean);
+
+  const runDelete = db.transaction(() => {
+    attachmentIds.forEach((attId) => deleteAttachmentById(attId));
+    pollIds.forEach((pollId) => {
+      db.prepare('DELETE FROM poll_votes WHERE poll_id = ?').run(pollId);
+      db.prepare('DELETE FROM poll_options WHERE poll_id = ?').run(pollId);
+      db.prepare('DELETE FROM polls WHERE id = ?').run(pollId);
+    });
+    db.prepare('DELETE FROM turma_message_reads WHERE turma_id = ?').run(turma.id);
+    db.prepare('DELETE FROM messages WHERE turma_id = ?').run(turma.id);
+    db.prepare('DELETE FROM turma_members WHERE turma_id = ?').run(turma.id);
+    db.prepare('DELETE FROM turmas WHERE id = ?').run(turma.id);
+  });
+  runDelete();
+
+  io.to('turma_' + turma.id).emit('turma_deleted', { turmaId: turma.id });
+  res.json({ ok: true });
 });
 
 // Subquery reaproveitada nas duas variantes abaixo: quantas mensagens da
@@ -780,6 +900,14 @@ app.get('/api/turmas', requireAuth, (req, res) => {
         WHERE tm.user_id = ?
         ORDER BY t.created_at DESC
       `).all(req.user.id, req.user.id, req.user.id);
+  res.json({ turmas });
+});
+
+// Lista simples (so id + nome) de TODAS as turmas da creche, mesmo as que a
+// pessoa nao e membro - usado no seletor de turma ao criar um recado, ja que
+// Direcao/Gestor podem mandar recado pra qualquer turma.
+app.get('/api/turmas/all', requireAuth, requireRole(...TURMA_MANAGE_ROLES), (req, res) => {
+  const turmas = db.prepare('SELECT id, name FROM turmas ORDER BY name').all();
   res.json({ turmas });
 });
 
@@ -1301,23 +1429,30 @@ app.get('/api/conversations', requireAuth, (req, res) => {
   // "Nao escondida para mim" = a mensagem nao tem linha em dm_message_hidden
   // para o meu usuario (ou seja, eu nao pedi pra apagar ela so pra mim).
   const NOT_HIDDEN = `NOT IN (SELECT message_id FROM dm_message_hidden WHERE user_id = ?)`;
+  // Responsavel (pai/mae) deixa de enxergar mensagens de conversa privada com
+  // mais de 5 dias (a Direcao sempre pode consultar via auditoria); para
+  // qualquer outro cargo essa condicao fica vazia (sem filtro por idade).
+  const AGE_OK = req.user.role === 'pai'
+    ? `AND created_at >= datetime('now', '-${DM_MESSAGE_LIFETIME_DAYS} days')`
+    : '';
   const rows = db.prepare(`
     SELECT c.*,
       CASE WHEN c.user_a_id = ? THEN c.user_b_id ELSE c.user_a_id END as other_id,
-      (SELECT content FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ORDER BY id DESC LIMIT 1) as last_content,
-      (SELECT created_at FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ORDER BY id DESC LIMIT 1) as last_at,
-      (SELECT deleted_at FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ORDER BY id DESC LIMIT 1) as last_deleted_at,
-      (SELECT attachment_id FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ORDER BY id DESC LIMIT 1) as last_attachment_id,
+      (SELECT content FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ${AGE_OK} ORDER BY id DESC LIMIT 1) as last_content,
+      (SELECT created_at FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ${AGE_OK} ORDER BY id DESC LIMIT 1) as last_at,
+      (SELECT deleted_at FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ${AGE_OK} ORDER BY id DESC LIMIT 1) as last_deleted_at,
+      (SELECT attachment_id FROM dm_messages WHERE conversation_id = c.id AND id ${NOT_HIDDEN} ${AGE_OK} ORDER BY id DESC LIMIT 1) as last_attachment_id,
       (
         SELECT COUNT(*) FROM dm_messages m
         WHERE m.conversation_id = c.id AND m.sender_id != ? AND m.deleted_at IS NULL AND m.id ${NOT_HIDDEN}
           AND m.id > COALESCE((SELECT last_read_message_id FROM conversation_message_reads WHERE user_id = ? AND conversation_id = c.id), 0)
+          ${AGE_OK ? 'AND m.created_at >= datetime(\'now\', \'-' + DM_MESSAGE_LIFETIME_DAYS + ' days\')' : ''}
       ) as unread_count
     FROM conversations c
     WHERE (c.user_a_id = ? OR c.user_b_id = ?)
       AND (
         NOT EXISTS (SELECT 1 FROM dm_messages m WHERE m.conversation_id = c.id)
-        OR EXISTS (SELECT 1 FROM dm_messages m WHERE m.conversation_id = c.id AND m.id ${NOT_HIDDEN})
+        OR EXISTS (SELECT 1 FROM dm_messages m WHERE m.conversation_id = c.id AND m.id ${NOT_HIDDEN} ${AGE_OK})
       )
     ORDER BY COALESCE(last_at, c.created_at) DESC
   `).all(
@@ -1391,6 +1526,10 @@ app.post('/api/conversations', requireAuth, (req, res) => {
 });
 
 app.get('/api/conversations/:id/messages', requireAuth, requireConversationParticipant, (req, res) => {
+  // Responsavel deixa de ver mensagens com mais de 5 dias (veja DM_MESSAGE_LIFETIME_DAYS).
+  const ageFilter = req.user.role === 'pai'
+    ? `AND m.created_at >= datetime('now', '-${DM_MESSAGE_LIFETIME_DAYS} days')`
+    : '';
   const rows = db.prepare(`
     SELECT m.*, u.name as sender_name, u.role as sender_role, u.avatar_filename as sender_avatar,
            a.id as att_id, a.kind as att_kind, a.original_name as att_name
@@ -1399,6 +1538,7 @@ app.get('/api/conversations/:id/messages', requireAuth, requireConversationParti
     LEFT JOIN attachments a ON a.id = m.attachment_id
     WHERE m.conversation_id = ?
       AND m.id NOT IN (SELECT message_id FROM dm_message_hidden WHERE user_id = ?)
+      ${ageFilter}
     ORDER BY m.id ASC
     LIMIT 200
   `).all(req.conversationId, req.user.id);
@@ -1482,6 +1622,184 @@ app.post('/api/dm-messages/:id/hide-for-me', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'Voce nao faz parte desta conversa' });
   }
   db.prepare('INSERT OR IGNORE INTO dm_message_hidden (message_id, user_id) VALUES (?, ?)').run(msg.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Auditoria de conversas privadas (Direcao) - consulta qualquer conversa,
+// mesmo sem participar dela, inclusive mensagens que ja expiraram da tela do
+// responsavel (a idade nao e filtrada aqui de proposito).
+// ---------------------------------------------------------------------------
+app.get('/api/admin/conversations', requireAuth, requireRole(...AUDIT_DM_ROLES), (req, res) => {
+  const rows = db.prepare(`
+    SELECT c.*,
+      (SELECT content FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_content,
+      (SELECT created_at FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_at,
+      (SELECT deleted_at FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_deleted_at,
+      (SELECT attachment_id FROM dm_messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) as last_attachment_id,
+      (SELECT COUNT(*) FROM dm_messages WHERE conversation_id = c.id) as message_count
+    FROM conversations c
+    ORDER BY COALESCE(last_at, c.created_at) DESC
+  `).all();
+  const conversations = rows.map(r => {
+    const a = db.prepare('SELECT id, name, role FROM users WHERE id = ?').get(r.user_a_id);
+    const b = db.prepare('SELECT id, name, role FROM users WHERE id = ?').get(r.user_b_id);
+    let preview = null;
+    if (r.last_deleted_at) preview = 'Mensagem removida';
+    else if (r.last_content) preview = r.last_content;
+    else if (r.last_attachment_id) preview = 'Anexo';
+    return {
+      id: r.id,
+      userA: a ? { id: a.id, name: a.name, roleLabel: ROLE_LABELS[a.role] } : null,
+      userB: b ? { id: b.id, name: b.name, roleLabel: ROLE_LABELS[b.role] } : null,
+      lastMessagePreview: preview,
+      lastMessageAt: r.last_at || r.created_at,
+      messageCount: r.message_count
+    };
+  });
+  res.json({ conversations });
+});
+
+// Historico completo de qualquer conversa, sem filtro de idade nem de
+// mensagens escondidas - visao de auditoria, somente leitura.
+app.get('/api/admin/conversations/:id/messages', requireAuth, requireRole(...AUDIT_DM_ROLES), (req, res) => {
+  const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(req.params.id);
+  if (!conv) return res.status(404).json({ error: 'Conversa nao encontrada' });
+  const rows = db.prepare(`
+    SELECT m.*, u.name as sender_name, u.role as sender_role, u.avatar_filename as sender_avatar,
+           a.id as att_id, a.kind as att_kind, a.original_name as att_name
+    FROM dm_messages m
+    JOIN users u ON u.id = m.sender_id
+    LEFT JOIN attachments a ON a.id = m.attachment_id
+    WHERE m.conversation_id = ?
+    ORDER BY m.id ASC
+    LIMIT 500
+  `).all(conv.id);
+  res.json({
+    messages: rows.map(r => ({
+      id: r.id,
+      content: r.deleted_at ? null : r.content,
+      createdAt: r.created_at,
+      user: {
+        id: r.sender_id, name: r.sender_name, role: r.sender_role, roleLabel: ROLE_LABELS[r.sender_role],
+        avatarUrl: r.sender_avatar ? `/api/avatar/${r.sender_id}` : null
+      },
+      attachment: (!r.deleted_at && r.att_id) ? { id: r.att_id, kind: r.att_kind, name: r.att_name } : null,
+      deleted: !!r.deleted_at
+    }))
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Recados com ciencia obrigatoria (aparecem em tela cheia ao abrir o app)
+// ---------------------------------------------------------------------------
+
+// Cria um recado novo e avisa ao vivo (via socket) quem precisa ver.
+app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), (req, res) => {
+  const { message, audienceType, turmaId } = req.body;
+  if (!message || !message.trim()) return res.status(400).json({ error: 'Escreva o recado' });
+  if (!['all', 'turma'].includes(audienceType)) {
+    return res.status(400).json({ error: 'Escolha para quem e o recado' });
+  }
+  let resolvedTurmaId = null;
+  if (audienceType === 'turma') {
+    const turma = db.prepare('SELECT id FROM turmas WHERE id = ?').get(turmaId);
+    if (!turma) return res.status(400).json({ error: 'Turma invalida' });
+    resolvedTurmaId = turma.id;
+  }
+  const info = db.prepare(
+    'INSERT INTO announcements (message, created_by, audience_type, turma_id) VALUES (?, ?, ?, ?)'
+  ).run(message.trim(), req.user.id, audienceType, resolvedTurmaId);
+  const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(info.lastInsertRowid);
+
+  const audienceIds = getAnnouncementAudienceUserIds(announcement);
+  const payload = {
+    id: announcement.id,
+    message: announcement.message,
+    createdByName: req.user.name,
+    createdAt: announcement.created_at
+  };
+  // Avisa ao vivo quem ja estiver logado agora (quem nao estiver, ve o recado
+  // pendente assim que abrir o app, via GET /api/recados/pending).
+  audienceIds.forEach((uid) => io.to('user_' + uid).emit('new_recado', payload));
+
+  res.json({ announcement: { ...payload, audienceType, turmaId: resolvedTurmaId, audienceCount: audienceIds.length } });
+});
+
+// Recados pendentes (ainda sem ciencia) do usuario logado, do mais antigo
+// pro mais novo (pra ele confirmar em ordem, um de cada vez).
+app.get('/api/recados/pending', requireAuth, (req, res) => {
+  const candidates = db.prepare(`
+    SELECT * FROM announcements
+    WHERE canceled_at IS NULL AND created_by != ?
+      AND (audience_type = 'all' OR turma_id IN (SELECT turma_id FROM turma_members WHERE user_id = ?))
+    ORDER BY created_at ASC
+  `).all(req.user.id, req.user.id);
+  const ackedIds = new Set(
+    db.prepare('SELECT announcement_id FROM announcement_acks WHERE user_id = ?').all(req.user.id).map(r => r.announcement_id)
+  );
+  const pending = candidates.filter(a => !ackedIds.has(a.id)).map((a) => {
+    const author = db.prepare('SELECT name FROM users WHERE id = ?').get(a.created_by);
+    return { id: a.id, message: a.message, createdByName: author ? author.name : '', createdAt: a.created_at };
+  });
+  res.json({ pending });
+});
+
+// Da ciencia num recado - avisa quem criou (se estiver online) pra
+// atualizar a lista de confirmacoes ao vivo.
+app.post('/api/recados/:id/ack', requireAuth, (req, res) => {
+  const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id);
+  if (!announcement) return res.status(404).json({ error: 'Recado nao encontrado' });
+  db.prepare('INSERT OR IGNORE INTO announcement_acks (announcement_id, user_id) VALUES (?, ?)').run(announcement.id, req.user.id);
+  io.to('user_' + announcement.created_by).emit('recado_ack_update', {
+    announcementId: announcement.id, userId: req.user.id, userName: req.user.name
+  });
+  res.json({ ok: true });
+});
+
+// Lista de quem precisa confirmar e quem ja confirmou - so pra quem criou o
+// recado ou pra Direcao/Gestor.
+app.get('/api/recados/:id/acks', requireAuth, (req, res) => {
+  const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id);
+  if (!announcement) return res.status(404).json({ error: 'Recado nao encontrado' });
+  if (announcement.created_by !== req.user.id && !AUDIT_DM_ROLES.includes(req.user.role) && req.user.role !== 'gestor') {
+    return res.status(403).json({ error: 'Sem permissao para ver as confirmacoes deste recado' });
+  }
+  res.json(getAnnouncementAcksPayload(announcement));
+});
+
+// Historico de recados criados (tela de gestao da Direcao) com o resumo de
+// quantas pessoas ja confirmaram cada um.
+app.get('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), (req, res) => {
+  const rows = db.prepare('SELECT * FROM announcements ORDER BY created_at DESC LIMIT 50').all();
+  const announcements = rows.map((a) => {
+    const author = db.prepare('SELECT name FROM users WHERE id = ?').get(a.created_by);
+    const acks = getAnnouncementAcksPayload(a);
+    let turmaName = null;
+    if (a.turma_id) {
+      const t = db.prepare('SELECT name FROM turmas WHERE id = ?').get(a.turma_id);
+      turmaName = t ? t.name : null;
+    }
+    return {
+      id: a.id, message: a.message, createdByName: author ? author.name : '', createdAt: a.created_at,
+      audienceType: a.audience_type, turmaName, canceled: !!a.canceled_at,
+      ackedCount: acks.ackedCount, total: acks.total,
+      canCancel: a.created_by === req.user.id || req.user.role === 'gestor'
+    };
+  });
+  res.json({ announcements });
+});
+
+// Cancela um recado (some para quem ainda nao viu; quem ja confirmou nao muda nada).
+app.delete('/api/recados/:id', requireAuth, (req, res) => {
+  const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id);
+  if (!announcement) return res.status(404).json({ error: 'Recado nao encontrado' });
+  if (announcement.created_by !== req.user.id && req.user.role !== 'gestor') {
+    return res.status(403).json({ error: 'Sem permissao para cancelar este recado' });
+  }
+  db.prepare('UPDATE announcements SET canceled_at = CURRENT_TIMESTAMP WHERE id = ?').run(announcement.id);
+  const audienceIds = getAnnouncementAudienceUserIds(announcement);
+  audienceIds.forEach((uid) => io.to('user_' + uid).emit('recado_canceled', { announcementId: announcement.id }));
   res.json({ ok: true });
 });
 
@@ -1754,6 +2072,49 @@ app.use((err, req, res, next) => {
   }
   next();
 });
+
+// ---------------------------------------------------------------------------
+// Limpeza automatica: mensagens de turma somem definitivamente apos 5 dias
+// (texto, fotos/PDFs anexados e enquetes junto) - e o que mantem o app leve
+// e sem ocupar espaco demais no disco do Render.
+// ---------------------------------------------------------------------------
+const TURMA_MESSAGE_LIFETIME_DAYS = 5;
+
+function purgeOldTurmaMessages() {
+  try {
+    const old = db.prepare(`
+      SELECT id, turma_id, attachment_id, poll_id FROM messages
+      WHERE turma_id IS NOT NULL AND created_at < datetime('now', '-${TURMA_MESSAGE_LIFETIME_DAYS} days')
+    `).all();
+    if (!old.length) return;
+
+    const runPurge = db.transaction(() => {
+      old.forEach((m) => {
+        if (m.attachment_id) deleteAttachmentById(m.attachment_id);
+        if (m.poll_id) {
+          db.prepare('DELETE FROM poll_votes WHERE poll_id = ?').run(m.poll_id);
+          db.prepare('DELETE FROM poll_options WHERE poll_id = ?').run(m.poll_id);
+          db.prepare('DELETE FROM polls WHERE id = ?').run(m.poll_id);
+        }
+        db.prepare('DELETE FROM messages WHERE id = ?').run(m.id);
+      });
+    });
+    runPurge();
+
+    // Avisa quem estiver com a turma aberta na tela agora pra sumir com a
+    // mensagem ao vivo, sem precisar recarregar a pagina.
+    old.forEach((m) => {
+      io.to('turma_' + m.turma_id).emit('message_purged', { turmaId: m.turma_id, id: m.id });
+    });
+    console.log(`Limpeza automatica: ${old.length} mensagem(ns) de turma com mais de ${TURMA_MESSAGE_LIFETIME_DAYS} dias removida(s).`);
+  } catch (err) {
+    console.error('Erro na limpeza automatica de mensagens antigas:', err);
+  }
+}
+
+// Roda uma vez pouco depois de subir o servidor, e depois a cada hora.
+setTimeout(purgeOldTurmaMessages, 60 * 1000);
+setInterval(purgeOldTurmaMessages, 60 * 60 * 1000);
 
 server.listen(PORT, () => {
   console.log(`CEI Ângela Amin app rodando em http://localhost:${PORT}`);

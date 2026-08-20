@@ -6,7 +6,6 @@
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
   const STAFF_ROLES = ['estagiaria', 'professora_regente', 'professora_auxiliar', 'cozinha', 'diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
-  const TURMA_CREATE_ROLES = ['gestor'];
   const CARDAPIO_ROLES = ['cozinha', 'professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'gestor'];
   const CARDAPIO_ADMIN_ROLES = ['diretora', 'coordenadora_pedagogica', 'gestor'];
   const CARDAPIO_EDIT_ROLES = ['cozinha', 'secretaria', 'coordenadora_pedagogica', 'gestor'];
@@ -16,8 +15,11 @@
   const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica', 'gestor'];
   const FORWARD_TARGET_ROLES = ['professora_regente', 'secretaria', 'coordenadora_pedagogica', 'diretora', 'gestor'];
   const POLL_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
+  const TURMA_MANAGE_ROLES = DIRECAO_ROLES; // criar, editar (renomear) ou excluir turma
+  const AUDIT_DM_ROLES = DIRECAO_ROLES; // consultar qualquer conversa privada (auditoria)
+  const RECADO_CREATE_ROLES = DIRECAO_ROLES; // criar recado com ciencia obrigatoria
 
-  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios'];
+  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios', 'auditoria', 'recados'];
 
   const state = {
     user: null,
@@ -29,7 +31,9 @@
     inviteTurmaName: null,
     calMonth: new Date(), // mes atualmente exibido no calendario (dia nao importa)
     replyingTo: null, // { id, authorName, snippet } - mensagem da turma que estou respondendo
-    myPollVotes: {} // pollId -> optionId que eu escolhi (cache local pra nao perder o "selecionado" em updates ao vivo)
+    myPollVotes: {}, // pollId -> optionId que eu escolhi (cache local pra nao perder o "selecionado" em updates ao vivo)
+    recadoQueue: [], // recados pendentes de ciencia, mostrados um de cada vez
+    auditoriaConversations: []
   };
 
   // ------------------------------------------------------------------
@@ -333,11 +337,13 @@
     badge.textContent = state.user.roleLabel;
     badge.className = 'role-badge role-' + state.user.role;
     updateTopbarAvatar();
-    document.getElementById('btn-new-turma').classList.toggle('hidden', !TURMA_CREATE_ROLES.includes(state.user.role));
+    document.getElementById('btn-new-turma').classList.toggle('hidden', !TURMA_MANAGE_ROLES.includes(state.user.role));
     document.getElementById('btn-new-meal').classList.toggle('hidden', !CARDAPIO_ROLES.includes(state.user.role));
     document.getElementById('btn-new-lancamento').classList.toggle('hidden', !FIN_MANAGE_ROLES.includes(state.user.role));
     document.getElementById('btn-new-evento').classList.toggle('hidden', !CALENDARIO_EDIT_ROLES.includes(state.user.role));
     document.getElementById('nav-usuarios').classList.toggle('hidden', !DIRECAO_ROLES.includes(state.user.role));
+    document.getElementById('nav-auditoria').classList.toggle('hidden', !AUDIT_DM_ROLES.includes(state.user.role));
+    document.getElementById('nav-recados').classList.toggle('hidden', !RECADO_CREATE_ROLES.includes(state.user.role));
 
     connectSocket();
     setupNav();
@@ -347,6 +353,7 @@
     await handlePendingInvite();
     await loadTurmas();
     await openDeepLinkFromUrl(location.href);
+    checkPendingRecados();
 
     // limpa o parametro ?invite=/?openTurma=/?openConversation= da URL para
     // nao repetir o fluxo em um refresh
@@ -473,6 +480,51 @@
     state.socket.on('poll_vote_update', (info) => {
       applyPollVoteUpdate(info);
     });
+    // Mensagem de turma completou 5 dias e foi apagada de vez (limpeza
+    // automatica) - some da tela sem deixar "mensagem removida", pois nem
+    // existe mais no banco.
+    state.socket.on('message_purged', (info) => {
+      if (state.chat && state.chat.type === 'turma' && info.turmaId === state.chat.id) {
+        const wrap = document.querySelector(`#chat-messages [data-msg-id="${info.id}"]`);
+        if (wrap) wrap.remove();
+      }
+    });
+    // Chegou um recado novo enquanto eu ja estava com o app aberto - entra na fila.
+    state.socket.on('new_recado', (r) => {
+      if (!state.recadoQueue.some(q => q.id === r.id)) {
+        state.recadoQueue.push(r);
+        showNextRecado();
+      }
+    });
+    // Alguem deu ciencia num recado que eu criei - atualiza a lista se estiver aberta.
+    state.socket.on('recado_ack_update', () => {
+      const modal = document.querySelector('#modal-root .modal-backdrop[data-recado-id]');
+      if (modal) openRecadoAcksModal(Number(modal.dataset.recadoId));
+      if (document.getElementById('view-recados') && !document.getElementById('view-recados').classList.contains('hidden')) {
+        loadRecadosScreen();
+      }
+    });
+    // Um recado foi cancelado antes de eu dar ciencia - tira da fila.
+    state.socket.on('recado_canceled', ({ announcementId }) => {
+      state.recadoQueue = state.recadoQueue.filter(q => q.id !== announcementId);
+      showNextRecado();
+    });
+    // Uma turma foi renomeada - atualiza o titulo se essa turma estiver aberta agora
+    state.socket.on('turma_renamed', (info) => {
+      if (state.chat && state.chat.type === 'turma' && state.chat.id === info.turmaId) {
+        state.chat.name = info.name;
+        document.getElementById('chat-turma-name').innerHTML = escapeHtml(info.name);
+      }
+      loadTurmas().catch(() => {});
+    });
+    // Uma turma foi excluida - se for a que esta aberta, volta pra lista
+    state.socket.on('turma_deleted', (info) => {
+      if (state.chat && state.chat.type === 'turma' && state.chat.id === info.turmaId) {
+        alert('Esta turma foi excluida.');
+        showView('turmas');
+      }
+      loadTurmas().catch(() => {});
+    });
   }
 
   function applyTurmaReadUpdate({ userId, userName }) {
@@ -514,6 +566,8 @@
     if (name === 'financeiro') loadFinanceiro();
     if (name === 'calendario') loadCalendario();
     if (name === 'usuarios') loadUsuarios();
+    if (name === 'auditoria') loadAuditoria();
+    if (name === 'recados') loadRecadosScreen();
   }
 
   function leaveChatSocketIfNeeded() {
@@ -533,17 +587,64 @@
     const grid = document.getElementById('turma-grid');
     grid.innerHTML = '';
     if (!data.turmas.length) {
-      grid.innerHTML = `<div class="empty-state">Nenhuma turma ainda.${TURMA_CREATE_ROLES.includes(state.user.role) ? ' Clique em "Criar turma" para comecar.' : ' Peca a professora o link de convite da turma.'}</div>`;
+      grid.innerHTML = `<div class="empty-state">Nenhuma turma ainda.${TURMA_MANAGE_ROLES.includes(state.user.role) ? ' Clique em "Criar turma" para comecar.' : ' Peca a professora o link de convite da turma.'}</div>`;
       return;
     }
+    const canManageTurma = TURMA_MANAGE_ROLES.includes(state.user.role);
     data.turmas.forEach(t => {
       const card = el(`<div class="turma-card">
+        ${canManageTurma ? `
+          <div class="turma-card-admin-actions">
+            <button class="icon-btn-sm btn-edit-turma" title="Renomear turma">✏️</button>
+            <button class="icon-btn-sm btn-delete-turma" title="Excluir turma">🗑</button>
+          </div>` : ''}
         <h3>${escapeHtml(t.name)} ${t.unread_count > 0 ? `<span class="unread-badge">${t.unread_count}</span>` : ''}</h3>
         <p>${t.member_count} participante(s)</p>
       </div>`);
       card.addEventListener('click', () => openChat(t));
+      const editBtn = card.querySelector('.btn-edit-turma');
+      if (editBtn) editBtn.addEventListener('click', (e) => { e.stopPropagation(); openEditTurmaModal(t); });
+      const delBtn = card.querySelector('.btn-delete-turma');
+      if (delBtn) delBtn.addEventListener('click', (e) => { e.stopPropagation(); confirmDeleteTurma(t); });
       grid.appendChild(card);
     });
+  }
+
+  function openEditTurmaModal(turma) {
+    openModal(`
+      <h3>Renomear turma</h3>
+      <div class="field"><label>Nome da turma</label><input id="edit-turma-name" value="${escapeHtml(turma.name)}" /></div>
+      <div class="error-msg" id="edit-turma-error"></div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="cancel-edit-turma">Cancelar</button>
+        <button class="btn" id="confirm-edit-turma">Salvar</button>
+      </div>
+    `);
+    document.getElementById('cancel-edit-turma').addEventListener('click', closeModal);
+    document.getElementById('confirm-edit-turma').addEventListener('click', async () => {
+      const name = document.getElementById('edit-turma-name').value.trim();
+      if (!name) return;
+      try {
+        await api(`/api/turmas/${turma.id}`, { method: 'PUT', body: { name } });
+        closeModal();
+        loadTurmas();
+      } catch (err) {
+        document.getElementById('edit-turma-error').textContent = err.message;
+      }
+    });
+  }
+
+  async function confirmDeleteTurma(turma) {
+    const sure = confirm(
+      `Excluir a turma "${turma.name}" para sempre?\n\nIsso apaga DEFINITIVAMENTE todas as mensagens, fotos/PDFs e a lista de participantes dessa turma. Nao tem como desfazer.`
+    );
+    if (!sure) return;
+    try {
+      await api(`/api/turmas/${turma.id}`, { method: 'DELETE' });
+      loadTurmas();
+    } catch (err) {
+      alert('Erro ao excluir turma: ' + err.message);
+    }
   }
 
   document.getElementById('btn-new-turma').addEventListener('click', () => {
@@ -604,6 +705,8 @@
     document.getElementById('btn-invite').classList.remove('hidden');
     document.getElementById('btn-members').classList.remove('hidden');
     document.getElementById('btn-poll').classList.toggle('hidden', !POLL_CREATE_ROLES.includes(state.user.role));
+    document.getElementById('chat-input-bar').classList.remove('hidden');
+    document.getElementById('audit-note').classList.add('hidden');
     document.getElementById('chat-messages').innerHTML = '';
 
     state.socket.emit('join_turma', turma.id);
@@ -620,7 +723,9 @@
   }
 
   document.getElementById('btn-back-turmas').addEventListener('click', () => {
-    showView(state.chat && state.chat.type === 'conversation' ? 'mensagens' : 'turmas');
+    if (state.chat && state.chat.type === 'conversation') return showView('mensagens');
+    if (state.chat && state.chat.type === 'audit') return showView('auditoria');
+    showView('turmas');
   });
 
   document.getElementById('btn-invite').addEventListener('click', () => {
@@ -1143,6 +1248,8 @@
     document.getElementById('btn-invite').classList.add('hidden');
     document.getElementById('btn-members').classList.add('hidden');
     document.getElementById('btn-poll').classList.add('hidden');
+    document.getElementById('chat-input-bar').classList.remove('hidden');
+    document.getElementById('audit-note').classList.add('hidden');
     document.getElementById('chat-messages').innerHTML = '';
 
     state.socket.emit('join_conversation', conv.id);
@@ -1150,6 +1257,72 @@
     data.messages.forEach(appendMessage);
     scrollChatToBottom();
     markConversationAsRead(conv.id);
+  }
+
+  // ------------------------------------------------------------------
+  // Auditoria de conversas privadas (Direcao) - visualizacao somente leitura
+  // ------------------------------------------------------------------
+  async function loadAuditoria() {
+    let conversations = [];
+    try {
+      const data = await api('/api/admin/conversations');
+      conversations = data.conversations;
+    } catch (err) {
+      document.getElementById('auditoria-list').innerHTML = `<div class="empty-state">Erro ao carregar: ${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    state.auditoriaConversations = conversations;
+    renderAuditoriaList(conversations);
+    document.getElementById('auditoria-search').oninput = () => {
+      const q = document.getElementById('auditoria-search').value.trim().toLowerCase();
+      const filtered = !q ? conversations : conversations.filter(c =>
+        (c.userA && c.userA.name.toLowerCase().includes(q)) || (c.userB && c.userB.name.toLowerCase().includes(q))
+      );
+      renderAuditoriaList(filtered);
+    };
+  }
+
+  function renderAuditoriaList(conversations) {
+    const list = document.getElementById('auditoria-list');
+    list.innerHTML = '';
+    if (!conversations.length) {
+      list.innerHTML = '<div class="empty-state">Nenhuma conversa encontrada.</div>';
+      return;
+    }
+    conversations.forEach(c => {
+      const nameA = c.userA ? c.userA.name : '?';
+      const nameB = c.userB ? c.userB.name : '?';
+      const card = el(`<div class="turma-card conversa-card">
+        <h3>${escapeHtml(nameA)} ↔ ${escapeHtml(nameB)}</h3>
+        <p>${c.lastMessagePreview ? escapeHtml(c.lastMessagePreview) : 'Nenhuma mensagem ainda'} · ${c.messageCount} mensagem(ns)</p>
+      </div>`);
+      card.addEventListener('click', () => openAuditConversation(c));
+      list.appendChild(card);
+    });
+  }
+
+  async function openAuditConversation(conv) {
+    const nameA = conv.userA ? conv.userA.name : '?';
+    const nameB = conv.userB ? conv.userB.name : '?';
+    state.chat = { type: 'audit', id: conv.id, name: `${nameA} ↔ ${nameB}` };
+    document.getElementById('view-chat').classList.remove('hidden');
+    NAV_VIEWS.forEach(v => document.getElementById('view-' + v).classList.add('hidden'));
+    document.querySelector('.nav-tabs').classList.add('hidden');
+    document.getElementById('chat-turma-name').textContent = `${nameA} ↔ ${nameB}`;
+    document.getElementById('btn-invite').classList.add('hidden');
+    document.getElementById('btn-members').classList.add('hidden');
+    document.getElementById('btn-poll').classList.add('hidden');
+    document.getElementById('chat-input-bar').classList.add('hidden');
+    document.getElementById('audit-note').classList.remove('hidden');
+    document.getElementById('chat-messages').innerHTML = '';
+
+    try {
+      const data = await api(`/api/admin/conversations/${conv.id}/messages`);
+      data.messages.forEach(appendMessage);
+      scrollChatToBottom();
+    } catch (err) {
+      alert('Erro ao carregar conversa: ' + err.message);
+    }
   }
 
   function markConversationAsRead(conversationId) {
@@ -1274,6 +1447,171 @@
       tbody.appendChild(tr);
     });
   }
+
+  // ------------------------------------------------------------------
+  // Recados com ciencia obrigatoria
+  // ------------------------------------------------------------------
+
+  // Busca recados pendentes e comeca a mostrar um de cada vez, em tela cheia.
+  async function checkPendingRecados() {
+    try {
+      const data = await api('/api/recados/pending');
+      data.pending.forEach((r) => {
+        if (!state.recadoQueue.some(q => q.id === r.id)) state.recadoQueue.push(r);
+      });
+      showNextRecado();
+    } catch (err) {
+      // silencioso: nao trava o app se essa checagem falhar
+    }
+  }
+
+  function showNextRecado() {
+    const overlay = document.getElementById('recado-overlay');
+    if (!state.recadoQueue.length) {
+      overlay.classList.add('hidden');
+      return;
+    }
+    const r = state.recadoQueue[0];
+    document.getElementById('recado-author').textContent = r.createdByName ? `Enviado por ${r.createdByName}` : '';
+    document.getElementById('recado-message').textContent = r.message;
+    overlay.classList.remove('hidden');
+  }
+
+  document.getElementById('btn-recado-ack').addEventListener('click', async () => {
+    if (!state.recadoQueue.length) return;
+    const r = state.recadoQueue[0];
+    const btn = document.getElementById('btn-recado-ack');
+    btn.disabled = true;
+    try {
+      await api(`/api/recados/${r.id}/ack`, { method: 'POST' });
+      state.recadoQueue.shift();
+      showNextRecado();
+    } catch (err) {
+      alert('Erro ao confirmar: ' + err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function loadRecadosScreen() {
+    let announcements = [];
+    try {
+      const data = await api('/api/recados');
+      announcements = data.announcements;
+    } catch (err) {
+      document.getElementById('recados-list').innerHTML = `<div class="empty-state">Erro ao carregar: ${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    const list = document.getElementById('recados-list');
+    list.innerHTML = '';
+    if (!announcements.length) {
+      list.innerHTML = '<div class="empty-state">Nenhum recado enviado ainda.</div>';
+      return;
+    }
+    announcements.forEach((a) => {
+      const audience = a.audienceType === 'turma' ? `Turma: ${escapeHtml(a.turmaName || '?')}` : 'Todo mundo';
+      const card = el(`<div class="recado-card-admin${a.canceled ? ' canceled' : ''}">
+        <div class="recado-admin-msg">${escapeHtml(a.message)}</div>
+        <div class="recado-admin-meta">
+          <span>${audience} · por ${escapeHtml(a.createdByName)} · ${fmtDateTime(a.createdAt)}${a.canceled ? ' · <b>cancelado</b>' : ''}</span>
+          <span>
+            <span class="recado-admin-progress">${a.ackedCount}/${a.total} confirmaram</span>
+            <button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:8px" data-view-acks="${a.id}">ver lista</button>
+            ${(!a.canceled && a.canCancel) ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:4px" data-cancel="${a.id}">cancelar</button>` : ''}
+          </span>
+        </div>
+      </div>`);
+      card.querySelector('[data-view-acks]').addEventListener('click', () => openRecadoAcksModal(a.id));
+      const cancelBtn = card.querySelector('[data-cancel]');
+      if (cancelBtn) cancelBtn.addEventListener('click', async () => {
+        if (!confirm('Cancelar este recado? Quem ainda nao viu deixa de receber.')) return;
+        try {
+          await api(`/api/recados/${a.id}`, { method: 'DELETE' });
+          loadRecadosScreen();
+        } catch (err) {
+          alert('Erro ao cancelar: ' + err.message);
+        }
+      });
+      list.appendChild(card);
+    });
+  }
+
+  async function openRecadoAcksModal(recadoId) {
+    let acks;
+    try {
+      acks = await api(`/api/recados/${recadoId}/acks`);
+    } catch (err) {
+      alert('Erro ao carregar confirmacoes: ' + err.message);
+      return;
+    }
+    renderRecadoAcksModal(recadoId, acks);
+  }
+
+  function renderRecadoAcksModal(recadoId, acks) {
+    const rows = acks.people.map(p => `
+      <div class="acks-row">
+        <span>${escapeHtml(p.name)}</span>
+        <span class="${p.acked ? 'ack-yes' : 'ack-no'}">${p.acked ? '✔ confirmou' : 'aguardando'}</span>
+      </div>`).join('');
+    const modal = openModal(`
+      <h3>Confirmações (${acks.ackedCount}/${acks.total})</h3>
+      <div class="acks-list">${rows || '<p>Ninguem na audiencia deste recado.</p>'}</div>
+      <div class="modal-actions"><button class="btn secondary" id="close-acks">Fechar</button></div>
+    `);
+    document.getElementById('close-acks').addEventListener('click', closeModal);
+    modal.dataset.recadoId = recadoId;
+  }
+
+  document.getElementById('btn-new-recado').addEventListener('click', async () => {
+    let turmas = [];
+    try {
+      const data = await api('/api/turmas/all');
+      turmas = data.turmas;
+    } catch (err) { /* segue sem a lista de turmas se falhar */ }
+    openModal(`
+      <h3>Novo recado</h3>
+      <p style="font-size:13px;color:#666">Aparece em tela cheia assim que a pessoa abrir o app, e so some depois que ela der ciencia.</p>
+      <div class="field"><label>Mensagem</label><textarea id="recado-text" rows="4" placeholder="Escreva o recado..."></textarea></div>
+      <div class="field"><label>Para quem</label>
+        <select id="recado-audience">
+          <option value="all">Todo mundo</option>
+          <option value="turma">Uma turma especifica</option>
+        </select>
+      </div>
+      <div class="field hidden" id="recado-turma-field"><label>Turma</label>
+        <select id="recado-turma">${turmas.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')}</select>
+      </div>
+      <div class="error-msg" id="recado-error"></div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="cancel-recado">Cancelar</button>
+        <button class="btn" id="confirm-recado">Enviar</button>
+      </div>
+    `);
+    document.getElementById('recado-audience').addEventListener('change', (e) => {
+      document.getElementById('recado-turma-field').classList.toggle('hidden', e.target.value !== 'turma');
+    });
+    document.getElementById('cancel-recado').addEventListener('click', closeModal);
+    document.getElementById('confirm-recado').addEventListener('click', async () => {
+      const message = document.getElementById('recado-text').value.trim();
+      const audienceType = document.getElementById('recado-audience').value;
+      const turmaId = audienceType === 'turma' ? Number(document.getElementById('recado-turma').value) : null;
+      if (!message) {
+        document.getElementById('recado-error').textContent = 'Escreva o recado';
+        return;
+      }
+      if (audienceType === 'turma' && !turmaId) {
+        document.getElementById('recado-error').textContent = 'Escolha uma turma';
+        return;
+      }
+      try {
+        await api('/api/recados', { method: 'POST', body: { message, audienceType, turmaId } });
+        closeModal();
+        loadRecadosScreen();
+      } catch (err) {
+        document.getElementById('recado-error').textContent = err.message;
+      }
+    });
+  });
 
   // ------------------------------------------------------------------
   // Usuarios / redefinir senha (para direcao e gestor)

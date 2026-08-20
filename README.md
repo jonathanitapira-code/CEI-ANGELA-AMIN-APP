@@ -8,7 +8,7 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 
   ⚠️ Não é login por SMS/código de verificação — é telefone como identificador + senha, igual ao e-mail funcionava antes. Se no futuro você quiser verificação por SMS de verdade, é preciso contratar um serviço externo (ex: Twilio) e eu configuro a integração.
 - **Foto de perfil**: cada pessoa pode colocar sua foto clicando no próprio nome/avatar no topo do app. Aparece no chat, nas conversas privadas e na lista "Quem é quem". Sem foto, aparece um círculo colorido com a inicial do nome.
-- **Turmas criadas somente pelo Gestor** — as demais pessoas não veem mais a opção de criar turma. O Gestor gera o link de convite (`/?invite=CODIGO`) para os responsáveis entrarem.
+- **Turmas criadas, editadas e excluídas pelo Gestor e pela Direção** (Diretora, Coordenadora Pedagógica, Secretária) — as demais pessoas não veem essas opções. Quem cria a turma gera o link de convite (`/?invite=CODIGO`) para os responsáveis entrarem; um ícone ✏️ no card da turma permite renomear, e um ícone 🗑 permite **excluir a turma definitivamente** (some tudo: mensagens, fotos/PDFs anexados e a lista de participantes — pede confirmação antes, pois não tem como desfazer).
 - **Gerenciar quem está na turma**: o Gestor, a Coordenadora Pedagógica, ou a Professora Regente daquela turma específica podem adicionar uma pessoa já cadastrada diretamente (sem precisar do link) ou remover alguém, pela tela "Quem é quem".
 - **Um responsável pode estar em mais de uma turma** (ex: irmãos em turmas diferentes) — isso já funcionava, sem precisar de nenhuma mudança.
 - **Gestor tem acesso total**: enxerga e pode entrar em qualquer turma da creche mesmo sem ter sido adicionado nela, e passa em qualquer checagem de permissão do sistema — é o único cargo com esse acesso irrestrito.
@@ -36,6 +36,20 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Encaminhar recado para outras turmas**: toda mensagem de texto no chat da turma tem um botão ↪️ "Encaminhar" visível para Professora Regente, Secretária, Coordenadora Pedagógica, Diretora e Gestor. Ao clicar, a pessoa escolhe uma, várias ou todas as outras turmas da creche (tem um botão "Selecionar todas") e o recado aparece no chat de cada turma escolhida, com uma legenda avisando de qual turma e de quem é a mensagem original (ex: secretária avisa algo na turma Infantil 1 e encaminha o mesmo recado para todas as outras turmas de uma vez, sem reescrever). Só funciona com mensagens de texto (anexos não podem ser encaminhados por aqui).
 - **Responder mensagem na turma**: toda mensagem no chat da turma tem um botão ↩️ "Responder" — a mensagem nova aparece com uma citação da original acima dela (nome de quem escreveu + um resuminho do texto), igual a apps de mensagem comuns. Há um botão para cancelar a resposta antes de enviar.
 - **Enquete na turma**: Professora Regente, Professora Auxiliar, Estagiária e qualquer pessoa da Direção (Diretora, Coordenadora Pedagógica, Secretária, Gestor) podem clicar em "📊 Enquete" dentro de uma turma para criar uma pergunta com até 8 opções. Qualquer participante da turma vota uma vez (votar de novo troca o voto anterior, não soma dois votos) e **todo mundo da turma vê, em tempo real, quantos votos cada opção tem e o nome de quem votou em cada uma** — nada de voto anônimo aqui.
+- **Mensagens da turma somem depois de 5 dias**: todo texto/foto/PDF enviado no chat de uma turma é apagado **definitivamente** (banco de dados e arquivo no disco) 5 dias depois de enviado — é o que mantém o aplicativo leve e sem ocupar espaço demais no Render. Veja a seção "🗑️ Retenção de mensagens" abaixo para todos os detalhes.
+- **Conversas privadas expiram para o responsável em 5 dias**: numa conversa 1:1 entre um responsável e alguém da equipe, o responsável deixa de enxergar mensagens com mais de 5 dias (como se tivessem sido apagadas da tela dele). A pessoa da equipe do outro lado continua vendo normalmente, e a mensagem **não é apagada do banco** — a Direção (Diretora, Coordenadora Pedagógica, Secretária, Gestor) sempre pode consultar qualquer conversa, mesmo essas mais antigas, pela nova aba **"Auditoria"**.
+- **Aba "Auditoria" (Direção/Gestor)**: lista todas as conversas privadas da creche, mesmo as que a Direção não participa, com busca por nome. Ao abrir uma, mostra o histórico completo (inclusive mensagens já expiradas para o responsável) em modo somente leitura — não dá para responder por ali.
+- **Recados com ciência obrigatória**: na nova aba **"Recados"**, Diretora/Coordenadora Pedagógica/Secretária/Gestor podem escrever um aviso e escolher enviar para **todo mundo** ou só para **uma turma específica**. O recado aparece em tela cheia assim que a pessoa abre o aplicativo (ou na hora, se ela já estiver com o app aberto) e só some depois que ela clica em **"Dar ciência"** — não dá pra usar o app sem confirmar antes. Quem criou o recado acompanha, em tempo real, uma lista de quem já confirmou e quem ainda falta, e pode cancelar o recado a qualquer momento (quem ainda não viu deixa de receber).
+
+## 🗑️ Retenção de mensagens (o app fica mais leve sozinho)
+
+Para o aplicativo não crescer sem parar no disco do Render (o que custaria mais caro com o tempo), duas regras de "validade" foram criadas:
+
+- **Chat de turma — 5 dias**: toda mensagem (texto, foto ou PDF) enviada no chat de uma turma é **apagada para sempre** 5 dias depois de enviada — o texto some do banco de dados e o arquivo da foto/PDF é apagado do disco. Isso roda sozinho a cada hora, sem precisar de nenhuma ação manual. Se alguém estiver com o chat aberto na hora exata em que uma mensagem "vence", ela simplesmente some da tela ao vivo.
+- **Conversa privada — 5 dias só para o responsável**: como explicado acima, o texto continua guardado no banco (para a pessoa da equipe do outro lado e para a Direção/auditoria), só o responsável para de vê-lo depois de 5 dias.
+- Enquetes e respostas ("citações") ligadas a uma mensagem de turma que expirou também são removidas junto, para não deixar nada "solto" ocupando espaço.
+
+⚠️ **Isso é definitivo para o chat de turma** — depois de 5 dias não tem como recuperar aquela mensagem/foto/PDF, nem eu consigo trazer de volta. Se sua creche precisa guardar esse histórico por mais tempo (ex: para prestação de contas ou registro pedagógico), me avise que ajusto o prazo (ou desligo essa limpeza automática) facilmente no código (`server.js`, constantes `TURMA_MESSAGE_LIFETIME_DAYS` e `DM_MESSAGE_LIFETIME_DAYS`, ambas em 5 dias hoje).
 
 ## 📲 Instalar como aplicativo no celular
 
@@ -80,6 +94,8 @@ O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas fo
 **Sobre a atualização de "excluir conversa" e "apagar só para mim"**: adiciona uma tabela nova (`dm_message_hidden`) — também **não apaga nem exige recadastro de ninguém**.
 
 **Sobre a atualização de "editar cardápio", "encaminhar", "responder" e "enquete"**: adiciona duas colunas novas na tabela de mensagens (`reply_to_message_id`, `poll_id`) e três tabelas novas (`polls`, `poll_options`, `poll_votes`) — também **não apaga nem exige recadastro de ninguém**.
+
+**Sobre a atualização de "editar/excluir turma", "retenção de mensagens", "auditoria" e "recados"**: adiciona duas tabelas novas (`announcements`, `announcement_acks`) — também **não apaga nem exige recadastro de ninguém**. A limpeza automática de mensagens de turma com mais de 5 dias começa a rodar a partir do primeiro deploy desta versão (ela também apaga, aos poucos, qualquer mensagem de turma que já tinha mais de 5 dias antes da atualização).
 
 ## Como rodar localmente
 
@@ -170,7 +186,7 @@ uploads/
 | Ação | Responsável | Estagiária | Prof. Regente | Prof. Auxiliar | Cozinha | Diretora | Coord. Pedagógica | Secretária | Gestor |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | Entrar em turma pelo link       | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Criar turma / gerar convite     | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Criar / renomear / excluir turma | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Adicionar/remover pessoa de uma turma (sem link) | ❌ | ❌ | ✅ (só nas turmas em que ela está) | ❌ | ❌ | ❌ | ✅ (qualquer turma) | ❌ | ✅ (qualquer turma) |
 | Ver/entrar em qualquer turma mesmo sem ser membro | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Enviar mensagens/fotos/PDF no chat | ✅ | ✅ (se estiver na turma) | ✅ | ✅ | ✅ (se estiver na turma) | ✅ | ✅ | ✅ (se estiver na turma) | ✅ |
@@ -188,6 +204,9 @@ uploads/
 | Responder mensagem no chat da turma | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Criar enquete na turma          | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Votar em enquete da turma       | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Consultar conversas privadas antigas (auditoria) | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Criar recado com ciência obrigatória | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Dar ciência num recado recebido | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi adicionada por quem gerencia a turma).
 
@@ -202,11 +221,11 @@ Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daque
 
 ### Apagar mensagens
 
-- Chat da turma: dono da mensagem, professora regente ou qualquer pessoa da direção.
-- Conversa privada: só quem enviou a mensagem.
-- A mensagem não some do banco de dados — ela fica marcada como removida e aparece como "Mensagem removida" para preservar o histórico da conversa.
+- Chat da turma: dono da mensagem, professora regente ou qualquer pessoa da direção podem apagar na hora; além disso, **toda mensagem de turma soma 5 dias e é apagada automaticamente para sempre**, mesmo que ninguém peça (veja a seção "🗑️ Retenção de mensagens").
+- Conversa privada: só quem enviou pode apagar "para todos" (fica registrado "Mensagem removida"); qualquer participante pode apagar "só para mim" a qualquer mensagem; e **o responsável perde acesso a mensagens com mais de 5 dias** (a outra pessoa e a Direção continuam vendo).
+- Fora da retenção automática, a mensagem apagada manualmente não some do banco de dados — ela fica marcada como removida e aparece como "Mensagem removida" para preservar o histórico da conversa.
 
-Achou alguma dessas regras diferente do que sua creche precisa? É só pedir — dá pra ajustar cada linha dessa tabela facilmente no código (`server.js`, no topo, tem as listas `TURMA_CREATE_ROLES`, `CARDAPIO_ROLES`, `FIN_MANAGE_ROLES` etc.).
+Achou alguma dessas regras diferente do que sua creche precisa? É só pedir — dá pra ajustar cada linha dessa tabela facilmente no código (`server.js`, no topo, tem as listas `TURMA_MANAGE_ROLES`, `CARDAPIO_ROLES`, `FIN_MANAGE_ROLES` etc.).
 
 ## Limitações conhecidas (é um app funcional, mas ainda um primeiro passo)
 
