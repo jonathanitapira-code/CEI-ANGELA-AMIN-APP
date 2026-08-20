@@ -1473,8 +1473,32 @@
     }
     const r = state.recadoQueue[0];
     document.getElementById('recado-author').textContent = r.createdByName ? `Enviado por ${r.createdByName}` : '';
-    document.getElementById('recado-message').textContent = r.message;
+    const box = document.getElementById('recado-message');
+    box.innerHTML = '';
+    if (r.message) {
+      const p = document.createElement('div');
+      p.textContent = r.message;
+      p.style.whiteSpace = 'pre-wrap';
+      box.appendChild(p);
+    }
+    if (r.attachment) {
+      box.appendChild(renderRecadoAttachment(r.id, r.attachment));
+    }
     overlay.classList.remove('hidden');
+  }
+
+  // Monta a foto/PDF anexado a um recado (imagem aparece direto, PDF vira um
+  // "chip" clicavel que abre o visualizador do app).
+  function renderRecadoAttachment(recadoId, attachment) {
+    const url = `/api/recados/${recadoId}/attachment`;
+    if (attachment.kind === 'imagem') {
+      const img = el(`<img class="chat-thumb" style="max-width:100%;margin-top:8px" src="${url}" oncontextmenu="return false" draggable="false" />`);
+      img.addEventListener('click', () => openImageViewer(url));
+      return img;
+    }
+    const chip = el(`<div class="pdf-chip" style="margin-top:8px">📄 ${escapeHtml(attachment.name || 'Documento PDF')}</div>`);
+    chip.addEventListener('click', () => openPdfViewer(url));
+    return chip;
   }
 
   document.getElementById('btn-recado-ack').addEventListener('click', async () => {
@@ -1511,9 +1535,9 @@
     announcements.forEach((a) => {
       const audience = a.audienceType === 'turma' ? `Turma: ${escapeHtml(a.turmaName || '?')}` : 'Todo mundo';
       const card = el(`<div class="recado-card-admin${a.canceled ? ' canceled' : ''}">
-        <div class="recado-admin-msg">${escapeHtml(a.message)}</div>
+        ${a.message ? `<div class="recado-admin-msg">${escapeHtml(a.message)}</div>` : ''}
         <div class="recado-admin-meta">
-          <span>${audience} · por ${escapeHtml(a.createdByName)} · ${fmtDateTime(a.createdAt)}${a.canceled ? ' · <b>cancelado</b>' : ''}</span>
+          <span>${a.attachment ? (a.attachment.kind === 'imagem' ? '🖼️' : '📄') + ' anexo · ' : ''}${audience} · por ${escapeHtml(a.createdByName)} · ${fmtDateTime(a.createdAt)}${a.canceled ? ' · <b>cancelado</b>' : ''}</span>
           <span>
             <span class="recado-admin-progress">${a.ackedCount}/${a.total} confirmaram</span>
             <button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:8px" data-view-acks="${a.id}">ver lista</button>
@@ -1521,6 +1545,7 @@
           </span>
         </div>
       </div>`);
+      if (a.attachment) card.insertBefore(renderRecadoAttachment(a.id, a.attachment), card.querySelector('.recado-admin-meta'));
       card.querySelector('[data-view-acks]').addEventListener('click', () => openRecadoAcksModal(a.id));
       const cancelBtn = card.querySelector('[data-cancel]');
       if (cancelBtn) cancelBtn.addEventListener('click', async () => {
@@ -1571,7 +1596,11 @@
     openModal(`
       <h3>Novo recado</h3>
       <p style="font-size:13px;color:#666">Aparece em tela cheia assim que a pessoa abrir o app, e so some depois que ela der ciencia.</p>
-      <div class="field"><label>Mensagem</label><textarea id="recado-text" rows="4" placeholder="Escreva o recado..."></textarea></div>
+      <div class="field"><label>Mensagem (opcional se anexar uma imagem/PDF)</label><textarea id="recado-text" rows="4" placeholder="Escreva o recado..."></textarea></div>
+      <div class="field"><label>Anexar imagem ou PDF (opcional - pode ser um banner, cartaz, comunicado escaneado etc.)</label>
+        <input type="file" id="recado-file" accept="image/*,application/pdf" />
+        <div id="recado-file-preview" style="margin-top:8px"></div>
+      </div>
       <div class="field"><label>Para quem</label>
         <select id="recado-audience">
           <option value="all">Todo mundo</option>
@@ -1590,21 +1619,35 @@
     document.getElementById('recado-audience').addEventListener('change', (e) => {
       document.getElementById('recado-turma-field').classList.toggle('hidden', e.target.value !== 'turma');
     });
+    document.getElementById('recado-file').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      const preview = document.getElementById('recado-file-preview');
+      preview.innerHTML = '';
+      if (file) {
+        preview.textContent = `📎 ${file.name}`;
+      }
+    });
     document.getElementById('cancel-recado').addEventListener('click', closeModal);
     document.getElementById('confirm-recado').addEventListener('click', async () => {
       const message = document.getElementById('recado-text').value.trim();
+      const file = document.getElementById('recado-file').files[0] || null;
       const audienceType = document.getElementById('recado-audience').value;
       const turmaId = audienceType === 'turma' ? Number(document.getElementById('recado-turma').value) : null;
-      if (!message) {
-        document.getElementById('recado-error').textContent = 'Escreva o recado';
+      if (!message && !file) {
+        document.getElementById('recado-error').textContent = 'Escreva o recado ou anexe uma imagem/PDF';
         return;
       }
       if (audienceType === 'turma' && !turmaId) {
         document.getElementById('recado-error').textContent = 'Escolha uma turma';
         return;
       }
+      const fd = new FormData();
+      fd.append('message', message);
+      fd.append('audienceType', audienceType);
+      if (turmaId) fd.append('turmaId', turmaId);
+      if (file) fd.append('file', file);
       try {
-        await api('/api/recados', { method: 'POST', body: { message, audienceType, turmaId } });
+        await api('/api/recados', { method: 'POST', body: fd });
         closeModal();
         loadRecadosScreen();
       } catch (err) {

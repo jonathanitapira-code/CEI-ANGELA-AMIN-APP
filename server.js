@@ -257,12 +257,20 @@ CREATE TABLE IF NOT EXISTS poll_votes (
 -- Recados da Direcao: aparecem em tela cheia assim que a pessoa abre o app e
 -- so somem depois que ela clica em "Dar ciencia". audience_type = 'all'
 -- (todo mundo) ou 'turma' (so quem esta naquela turma especifica).
+-- "message" pode ficar vazio quando o recado e so uma imagem/banner/PDF (tem
+-- que ter pelo menos um dos dois: texto OU anexo, isso e validado no codigo).
+-- As colunas attachment_* guardam o arquivo direto aqui (nao usa a tabela
+-- "attachments" porque ela exige turma_id ou conversation_id preenchido).
 CREATE TABLE IF NOT EXISTS announcements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  message TEXT NOT NULL,
+  message TEXT,
   created_by INTEGER NOT NULL REFERENCES users(id),
   audience_type TEXT NOT NULL DEFAULT 'all' CHECK(audience_type IN ('all','turma')),
   turma_id INTEGER REFERENCES turmas(id),
+  attachment_filename TEXT,
+  attachment_original_name TEXT,
+  attachment_mime TEXT,
+  attachment_kind TEXT,
   canceled_at TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -292,6 +300,12 @@ if (!messageColumns.includes('reply_to_message_id')) {
 if (!messageColumns.includes('poll_id')) {
   db.exec('ALTER TABLE messages ADD COLUMN poll_id INTEGER');
 }
+const announcementColumns = db.prepare('PRAGMA table_info(announcements)').all().map(c => c.name);
+['attachment_filename', 'attachment_original_name', 'attachment_mime', 'attachment_kind'].forEach((col) => {
+  if (!announcementColumns.includes(col)) {
+    db.exec(`ALTER TABLE announcements ADD COLUMN ${col} TEXT`);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // App / middlewares
@@ -1694,10 +1708,21 @@ app.get('/api/admin/conversations/:id/messages', requireAuth, requireRole(...AUD
 // Recados com ciencia obrigatoria (aparecem em tela cheia ao abrir o app)
 // ---------------------------------------------------------------------------
 
-// Cria um recado novo e avisa ao vivo (via socket) quem precisa ver.
-app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), (req, res) => {
+// Monta o objeto "attachment" (se tiver) a partir de uma linha de announcements.
+function getAnnouncementAttachment(a) {
+  if (!a.attachment_filename) return null;
+  return { kind: a.attachment_kind, name: a.attachment_original_name };
+}
+
+// Cria um recado novo (texto e/ou uma imagem/PDF - "banner") e avisa ao vivo
+// (via socket) quem precisa ver.
+app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), upload.single('file'), (req, res) => {
   const { message, audienceType, turmaId } = req.body;
-  if (!message || !message.trim()) return res.status(400).json({ error: 'Escreva o recado' });
+  const hasText = message && message.trim();
+  const hasFile = !!req.file;
+  if (!hasText && !hasFile) {
+    return res.status(400).json({ error: 'Escreva o recado ou anexe uma imagem/PDF' });
+  }
   if (!['all', 'turma'].includes(audienceType)) {
     return res.status(400).json({ error: 'Escolha para quem e o recado' });
   }
@@ -1707,15 +1732,23 @@ app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), (req,
     if (!turma) return res.status(400).json({ error: 'Turma invalida' });
     resolvedTurmaId = turma.id;
   }
-  const info = db.prepare(
-    'INSERT INTO announcements (message, created_by, audience_type, turma_id) VALUES (?, ?, ?, ?)'
-  ).run(message.trim(), req.user.id, audienceType, resolvedTurmaId);
+  const info = db.prepare(`
+    INSERT INTO announcements (message, created_by, audience_type, turma_id, attachment_filename, attachment_original_name, attachment_mime, attachment_kind)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    hasText ? message.trim() : null, req.user.id, audienceType, resolvedTurmaId,
+    hasFile ? req.file.filename : null,
+    hasFile ? req.file.originalname : null,
+    hasFile ? req.file.mimetype : null,
+    hasFile ? (req.file.mimetype === 'application/pdf' ? 'pdf' : 'imagem') : null
+  );
   const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(info.lastInsertRowid);
 
   const audienceIds = getAnnouncementAudienceUserIds(announcement);
   const payload = {
     id: announcement.id,
     message: announcement.message,
+    attachment: getAnnouncementAttachment(announcement),
     createdByName: req.user.name,
     createdAt: announcement.created_at
   };
@@ -1740,9 +1773,31 @@ app.get('/api/recados/pending', requireAuth, (req, res) => {
   );
   const pending = candidates.filter(a => !ackedIds.has(a.id)).map((a) => {
     const author = db.prepare('SELECT name FROM users WHERE id = ?').get(a.created_by);
-    return { id: a.id, message: a.message, createdByName: author ? author.name : '', createdAt: a.created_at };
+    return {
+      id: a.id, message: a.message, attachment: getAnnouncementAttachment(a),
+      createdByName: author ? author.name : '', createdAt: a.created_at
+    };
   });
   res.json({ pending });
+});
+
+// Serve o anexo do recado (imagem ou PDF), sempre "inline", so para quem faz
+// parte da audiencia dele, quem criou, ou a Direcao/Gestor.
+app.get('/api/recados/:id/attachment', requireAuth, (req, res) => {
+  const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id);
+  if (!announcement || !announcement.attachment_filename) return res.status(404).end();
+  const canView = announcement.created_by === req.user.id
+    || RECADO_CREATE_ROLES.includes(req.user.role)
+    || req.user.role === 'gestor'
+    || getAnnouncementAudienceUserIds(announcement).includes(req.user.id);
+  if (!canView) return res.status(403).end();
+  const filePath = path.join(UPLOAD_DIR, announcement.attachment_filename);
+  if (!fs.existsSync(filePath)) return res.status(404).end();
+  res.setHeader('Content-Type', announcement.attachment_mime);
+  res.setHeader('Content-Disposition', 'inline');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, no-store');
+  fs.createReadStream(filePath).pipe(res);
 });
 
 // Da ciencia num recado - avisa quem criou (se estiver online) pra
@@ -1781,7 +1836,8 @@ app.get('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), (req, 
       turmaName = t ? t.name : null;
     }
     return {
-      id: a.id, message: a.message, createdByName: author ? author.name : '', createdAt: a.created_at,
+      id: a.id, message: a.message, attachment: getAnnouncementAttachment(a),
+      createdByName: author ? author.name : '', createdAt: a.created_at,
       audienceType: a.audience_type, turmaName, canceled: !!a.canceled_at,
       ackedCount: acks.ackedCount, total: acks.total,
       canCancel: a.created_by === req.user.id || req.user.role === 'gestor'
@@ -1791,6 +1847,7 @@ app.get('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), (req, 
 });
 
 // Cancela um recado (some para quem ainda nao viu; quem ja confirmou nao muda nada).
+// Tambem apaga o arquivo anexado do disco, se tiver, pra nao ficar ocupando espaco a toa.
 app.delete('/api/recados/:id', requireAuth, (req, res) => {
   const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id);
   if (!announcement) return res.status(404).json({ error: 'Recado nao encontrado' });
@@ -1798,6 +1855,9 @@ app.delete('/api/recados/:id', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'Sem permissao para cancelar este recado' });
   }
   db.prepare('UPDATE announcements SET canceled_at = CURRENT_TIMESTAMP WHERE id = ?').run(announcement.id);
+  if (announcement.attachment_filename) {
+    fs.unlink(path.join(UPLOAD_DIR, announcement.attachment_filename), () => {});
+  }
   const audienceIds = getAnnouncementAudienceUserIds(announcement);
   audienceIds.forEach((uid) => io.to('user_' + uid).emit('recado_canceled', { announcementId: announcement.id }));
   res.json({ ok: true });

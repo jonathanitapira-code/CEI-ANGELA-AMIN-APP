@@ -41,6 +41,8 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Aba "Auditoria" (Direção/Gestor)**: lista todas as conversas privadas da creche, mesmo as que a Direção não participa, com busca por nome. Ao abrir uma, mostra o histórico completo (inclusive mensagens já expiradas para o responsável) em modo somente leitura — não dá para responder por ali.
 - **Recados com ciência obrigatória**: na nova aba **"Recados"**, Diretora/Coordenadora Pedagógica/Secretária/Gestor podem escrever um aviso e escolher enviar para **todo mundo** ou só para **uma turma específica**. O recado aparece em tela cheia assim que a pessoa abre o aplicativo (ou na hora, se ela já estiver com o app aberto) e só some depois que ela clica em **"Dar ciência"** — não dá pra usar o app sem confirmar antes. Quem criou o recado acompanha, em tempo real, uma lista de quem já confirmou e quem ainda falta, e pode cancelar o recado a qualquer momento (quem ainda não viu deixa de receber).
 
+  📎 **O recado pode ser só texto, só uma imagem/PDF (um banner, cartaz ou comunicado escaneado), ou os dois juntos.** A imagem aparece direto na tela do recado; o PDF vira um botão que abre no visualizador do próprio app (mesma proteção contra download fácil usada no chat).
+
 ## 🗑️ Retenção de mensagens (o app fica mais leve sozinho)
 
 Para o aplicativo não crescer sem parar no disco do Render (o que custaria mais caro com o tempo), duas regras de "validade" foram criadas:
@@ -95,7 +97,7 @@ O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas fo
 
 **Sobre a atualização de "editar cardápio", "encaminhar", "responder" e "enquete"**: adiciona duas colunas novas na tabela de mensagens (`reply_to_message_id`, `poll_id`) e três tabelas novas (`polls`, `poll_options`, `poll_votes`) — também **não apaga nem exige recadastro de ninguém**.
 
-**Sobre a atualização de "editar/excluir turma", "retenção de mensagens", "auditoria" e "recados"**: adiciona duas tabelas novas (`announcements`, `announcement_acks`) — também **não apaga nem exige recadastro de ninguém**. A limpeza automática de mensagens de turma com mais de 5 dias começa a rodar a partir do primeiro deploy desta versão (ela também apaga, aos poucos, qualquer mensagem de turma que já tinha mais de 5 dias antes da atualização).
+**Sobre a atualização de "editar/excluir turma", "retenção de mensagens", "auditoria" e "recados"**: adiciona duas tabelas novas (`announcements`, já com as colunas do anexo de imagem/PDF, e `announcement_acks`) — também **não apaga nem exige recadastro de ninguém**. A limpeza automática de mensagens de turma com mais de 5 dias começa a rodar a partir do primeiro deploy desta versão (ela também apaga, aos poucos, qualquer mensagem de turma que já tinha mais de 5 dias antes da atualização).
 
 ## Como rodar localmente
 
