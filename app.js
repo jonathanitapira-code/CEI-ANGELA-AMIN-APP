@@ -480,6 +480,10 @@
     state.socket.on('poll_vote_update', (info) => {
       applyPollVoteUpdate(info);
     });
+    // Alguem reagiu (ou removeu a reacao) numa mensagem da turma aberta
+    state.socket.on('message_reaction_update', (info) => {
+      applyReactionUpdate(info);
+    });
     // Mensagem de turma completou 5 dias e foi apagada de vez (limpeza
     // automatica) - some da tela sem deixar "mensagem removida", pois nem
     // existe mais no banco.
@@ -876,6 +880,12 @@
     wrap.appendChild(meta);
     wrap.appendChild(bubble);
 
+    // Reacoes (joinha/coracao): so faz sentido no chat da turma e em mensagens
+    // que ainda existem (nao apagadas).
+    if (isTurma && !msg.deleted) {
+      wrap.appendChild(renderReactionsBar(msg.id, msg.reactions));
+    }
+
     // "Visto por" / "Visto": so mostra embaixo das minhas proprias mensagens
     if (mine && !msg.deleted) {
       const seenEl = document.createElement('div');
@@ -1062,6 +1072,41 @@
     if (!box) return;
     const fresh = renderPollWidget(data.poll);
     box.replaceWith(fresh);
+  }
+
+  // ------------------------------------------------------------------
+  // Reacoes nas mensagens da turma (joinha e coracao)
+  // ------------------------------------------------------------------
+  const REACTION_EMOJIS = ['👍', '❤️'];
+
+  function renderReactionsBar(msgId, reactions) {
+    const bar = el(`<div class="reactions-bar" data-msg-id="${msgId}"></div>`);
+    REACTION_EMOJIS.forEach((emoji) => {
+      const r = (reactions || []).find(x => x.emoji === emoji) || { emoji, count: 0, userIds: [], names: [] };
+      const mine = Array.isArray(r.userIds) && r.userIds.includes(state.user.id);
+      const btn = el(`<button type="button" class="reaction-btn ${mine ? 'mine' : ''}"><span>${emoji}</span>${r.count ? `<span class="reaction-count">${r.count}</span>` : ''}</button>`);
+      if (r.count && r.names && r.names.length) btn.title = r.names.join(', ');
+      btn.addEventListener('click', () => reactToMessage(msgId, emoji));
+      bar.appendChild(btn);
+    });
+    return bar;
+  }
+
+  async function reactToMessage(msgId, emoji) {
+    if (!state.chat || state.chat.type !== 'turma') return;
+    try {
+      const data = await api(`/api/turmas/${state.chat.id}/messages/${msgId}/react`, { method: 'POST', body: { emoji } });
+      applyReactionUpdate({ turmaId: state.chat.id, messageId: msgId, reactions: data.reactions });
+    } catch (err) {
+      alert('Erro ao reagir: ' + err.message);
+    }
+  }
+
+  function applyReactionUpdate(data) {
+    if (!state.chat || state.chat.type !== 'turma' || state.chat.id !== data.turmaId) return;
+    const oldBar = document.querySelector(`#chat-messages .reactions-bar[data-msg-id="${data.messageId}"]`);
+    if (!oldBar) return;
+    oldBar.replaceWith(renderReactionsBar(data.messageId, data.reactions));
   }
 
   function markMessageDeleted(id, deletedByName) {

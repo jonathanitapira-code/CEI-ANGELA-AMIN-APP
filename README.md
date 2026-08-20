@@ -36,6 +36,7 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Encaminhar recado para outras turmas**: toda mensagem de texto no chat da turma tem um botão ↪️ "Encaminhar" visível para Professora Regente, Secretária, Coordenadora Pedagógica, Diretora e Gestor. Ao clicar, a pessoa escolhe uma, várias ou todas as outras turmas da creche (tem um botão "Selecionar todas") e o recado aparece no chat de cada turma escolhida, com uma legenda avisando de qual turma e de quem é a mensagem original (ex: secretária avisa algo na turma Infantil 1 e encaminha o mesmo recado para todas as outras turmas de uma vez, sem reescrever). Só funciona com mensagens de texto (anexos não podem ser encaminhados por aqui).
 - **Responder mensagem na turma**: toda mensagem no chat da turma tem um botão ↩️ "Responder" — a mensagem nova aparece com uma citação da original acima dela (nome de quem escreveu + um resuminho do texto), igual a apps de mensagem comuns. Há um botão para cancelar a resposta antes de enviar.
 - **Enquete na turma**: Professora Regente, Professora Auxiliar, Estagiária e qualquer pessoa da Direção (Diretora, Coordenadora Pedagógica, Secretária, Gestor) podem clicar em "📊 Enquete" dentro de uma turma para criar uma pergunta com até 8 opções. Qualquer participante da turma vota uma vez (votar de novo troca o voto anterior, não soma dois votos) e **todo mundo da turma vê, em tempo real, quantos votos cada opção tem e o nome de quem votou em cada uma** — nada de voto anônimo aqui.
+- **Reagir às mensagens da turma (👍 e ❤️)**: toda mensagem no chat da turma tem dois botões embaixo, 👍 e ❤️. Qualquer pessoa da turma pode reagir (inclusive na própria mensagem); clicar de novo no mesmo emoji remove a reação, clicar no outro troca. O contador aparece ao lado do emoji e, passando o mouse/tocando e segurando, mostra o nome de quem reagiu — atualiza em tempo real na tela de todo mundo que estiver com o chat aberto.
 - **Mensagens da turma somem depois de 5 dias**: todo texto/foto/PDF enviado no chat de uma turma é apagado **definitivamente** (banco de dados e arquivo no disco) 5 dias depois de enviado — é o que mantém o aplicativo leve e sem ocupar espaço demais no Render. Veja a seção "🗑️ Retenção de mensagens" abaixo para todos os detalhes.
 - **Conversas privadas expiram para o responsável em 5 dias**: numa conversa 1:1 entre um responsável e alguém da equipe, o responsável deixa de enxergar mensagens com mais de 5 dias (como se tivessem sido apagadas da tela dele). A pessoa da equipe do outro lado continua vendo normalmente, e a mensagem **não é apagada do banco** — a Direção (Diretora, Coordenadora Pedagógica, Secretária, Gestor) sempre pode consultar qualquer conversa, mesmo essas mais antigas, pela nova aba **"Auditoria"**.
 - **Aba "Auditoria" (Direção/Gestor)**: lista todas as conversas privadas da creche, mesmo as que a Direção não participa, com busca por nome. Ao abrir uma, mostra o histórico completo (inclusive mensagens já expiradas para o responsável) em modo somente leitura — não dá para responder por ali.
@@ -98,6 +99,8 @@ O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas fo
 **Sobre a atualização de "editar cardápio", "encaminhar", "responder" e "enquete"**: adiciona duas colunas novas na tabela de mensagens (`reply_to_message_id`, `poll_id`) e três tabelas novas (`polls`, `poll_options`, `poll_votes`) — também **não apaga nem exige recadastro de ninguém**.
 
 **Sobre a atualização de "editar/excluir turma", "retenção de mensagens", "auditoria" e "recados"**: adiciona duas tabelas novas (`announcements`, já com as colunas do anexo de imagem/PDF, e `announcement_acks`) — também **não apaga nem exige recadastro de ninguém**. A limpeza automática de mensagens de turma com mais de 5 dias começa a rodar a partir do primeiro deploy desta versão (ela também apaga, aos poucos, qualquer mensagem de turma que já tinha mais de 5 dias antes da atualização).
+
+**Sobre a atualização de "reagir com 👍/❤️"**: adiciona uma tabela nova (`message_reactions`) — também **não apaga nem exige recadastro de ninguém**.
 
 ## Como rodar localmente
 
@@ -206,6 +209,7 @@ uploads/
 | Responder mensagem no chat da turma | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Criar enquete na turma          | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Votar em enquete da turma       | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Reagir (👍/❤️) a mensagem no chat da turma | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Consultar conversas privadas antigas (auditoria) | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Criar recado com ciência obrigatória | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Dar ciência num recado recebido | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |

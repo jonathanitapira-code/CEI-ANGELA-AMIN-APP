@@ -283,6 +283,17 @@ CREATE TABLE IF NOT EXISTS announcement_acks (
   acked_at TEXT DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (announcement_id, user_id)
 );
+
+-- Reacoes as mensagens das turmas (so joinha/positivo e coracao). Uma linha
+-- por pessoa por mensagem: reagir de novo com o mesmo emoji remove a reacao
+-- (toggle), reagir com o outro emoji troca. PRIMARY KEY garante isso.
+CREATE TABLE IF NOT EXISTS message_reactions (
+  message_id INTEGER NOT NULL REFERENCES messages(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  emoji TEXT NOT NULL CHECK(emoji IN ('👍','❤️')),
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (message_id, user_id)
+);
 `);
 
 // Migracao segura para bancos que ja existiam antes da coluna "active" existir:
@@ -471,6 +482,31 @@ function getMessageReplyPreview(replyToId) {
   else if (orig.attachment_id) snippet = 'Anexo';
   else snippet = '';
   return { id: orig.id, authorName: orig.author_name, snippet };
+}
+
+// Reacoes disponiveis (nessa ordem) e resumo de quem reagiu com o que numa
+// mensagem. Devolve sempre as duas entradas (mesmo com contagem 0) pra
+// simplificar a renderizacao no front. "mine" nao vem daqui: o front compara
+// os userIds com o proprio id, assim o mesmo payload serve pra qualquer
+// pessoa que olhar (nao precisa recalcular por usuario nem guardar cache
+// local pra saber "qual e a minha reacao", como foi preciso fazer nas
+// enquetes).
+const MESSAGE_REACTION_EMOJIS = ['👍', '❤️'];
+function getMessageReactionsPayload(messageId) {
+  const rows = db.prepare(`
+    SELECT r.emoji, r.user_id, u.name FROM message_reactions r
+    JOIN users u ON u.id = r.user_id
+    WHERE r.message_id = ?
+  `).all(messageId);
+  return MESSAGE_REACTION_EMOJIS.map((emoji) => {
+    const matches = rows.filter(r => r.emoji === emoji);
+    return {
+      emoji,
+      count: matches.length,
+      userIds: matches.map(r => r.user_id),
+      names: matches.map(r => r.name)
+    };
+  });
 }
 
 // Monta os dados completos de uma enquete (pergunta, opcoes, contagem de
@@ -879,6 +915,7 @@ app.delete('/api/turmas/:id', requireAuth, requireRole(...TURMA_MANAGE_ROLES), (
       db.prepare('DELETE FROM polls WHERE id = ?').run(pollId);
     });
     db.prepare('DELETE FROM turma_message_reads WHERE turma_id = ?').run(turma.id);
+    messages.forEach((m) => db.prepare('DELETE FROM message_reactions WHERE message_id = ?').run(m.id));
     db.prepare('DELETE FROM messages WHERE turma_id = ?').run(turma.id);
     db.prepare('DELETE FROM turma_members WHERE turma_id = ?').run(turma.id);
     db.prepare('DELETE FROM turmas WHERE id = ?').run(turma.id);
@@ -1114,7 +1151,8 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
         .filter(mr => mr.user_id !== r.user_id && mr.last_read_message_id >= r.id)
         .map(mr => mr.name),
       replyTo: getMessageReplyPreview(r.reply_to_message_id),
-      poll: r.poll_id ? getPollPayload(r.poll_id, req.user.id) : null
+      poll: r.poll_id ? getPollPayload(r.poll_id, req.user.id) : null,
+      reactions: r.deleted_at ? [] : getMessageReactionsPayload(r.id)
     }))
   });
 });
@@ -1152,7 +1190,8 @@ function createTurmaMessage(turmaId, userId, content, attachmentId, replyToId) {
     canDelete: row.user_id === userId,
     readBy: [],
     replyTo: getMessageReplyPreview(replyToId),
-    poll: null
+    poll: null,
+    reactions: getMessageReactionsPayload(row.id)
   };
 
   io.to('turma_' + turmaId).emit('new_message', payload);
@@ -1196,6 +1235,34 @@ app.post('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res)
   }
   const payload = createTurmaMessage(req.turmaId, req.user.id, content, attachmentId, replyToId);
   res.json({ message: payload });
+});
+
+// Reagir (joinha/coracao) a uma mensagem da turma. Clicar de novo no mesmo
+// emoji remove a reacao; clicar no outro emoji troca. Qualquer membro da
+// turma pode reagir, inclusive na propria mensagem.
+app.post('/api/turmas/:id/messages/:msgId/react', requireAuth, requireTurmaMember, (req, res) => {
+  const msg = db.prepare('SELECT id, deleted_at FROM messages WHERE id = ? AND turma_id = ?').get(req.params.msgId, req.turmaId);
+  if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
+  if (msg.deleted_at) return res.status(400).json({ error: 'Esta mensagem foi removida' });
+
+  const emoji = req.body.emoji;
+  if (!MESSAGE_REACTION_EMOJIS.includes(emoji)) {
+    return res.status(400).json({ error: 'Reacao invalida' });
+  }
+
+  const existing = db.prepare('SELECT emoji FROM message_reactions WHERE message_id = ? AND user_id = ?').get(msg.id, req.user.id);
+  if (existing && existing.emoji === emoji) {
+    db.prepare('DELETE FROM message_reactions WHERE message_id = ? AND user_id = ?').run(msg.id, req.user.id);
+  } else {
+    db.prepare(`
+      INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)
+      ON CONFLICT(message_id, user_id) DO UPDATE SET emoji = excluded.emoji, created_at = CURRENT_TIMESTAMP
+    `).run(msg.id, req.user.id, emoji);
+  }
+
+  const reactions = getMessageReactionsPayload(msg.id);
+  io.to('turma_' + req.turmaId).emit('message_reaction_update', { turmaId: req.turmaId, messageId: msg.id, reactions });
+  res.json({ reactions });
 });
 
 // Lista de turmas para as quais e possivel encaminhar um recado desta turma
@@ -1736,7 +1803,10 @@ app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), uploa
     INSERT INTO announcements (message, created_by, audience_type, turma_id, attachment_filename, attachment_original_name, attachment_mime, attachment_kind)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    hasText ? message.trim() : null, req.user.id, audienceType, resolvedTurmaId,
+    // Usa string vazia (nunca null) para o texto quando o recado e so
+    // imagem/PDF - assim funciona mesmo em bancos antigos onde a coluna
+    // "message" exige um valor preenchido.
+    hasText ? message.trim() : '', req.user.id, audienceType, resolvedTurmaId,
     hasFile ? req.file.filename : null,
     hasFile ? req.file.originalname : null,
     hasFile ? req.file.mimetype : null,
@@ -2156,6 +2226,7 @@ function purgeOldTurmaMessages() {
           db.prepare('DELETE FROM poll_options WHERE poll_id = ?').run(m.poll_id);
           db.prepare('DELETE FROM polls WHERE id = ?').run(m.poll_id);
         }
+        db.prepare('DELETE FROM message_reactions WHERE message_id = ?').run(m.id);
         db.prepare('DELETE FROM messages WHERE id = ?').run(m.id);
       });
     });
