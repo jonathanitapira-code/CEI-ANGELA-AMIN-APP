@@ -1482,13 +1482,14 @@
       box.appendChild(p);
     }
     if (r.attachment) {
-      box.appendChild(renderRecadoAttachment(r.id, r.attachment));
+      renderRecadoAttachmentAuto(box, r.id, r.attachment);
     }
     overlay.classList.remove('hidden');
   }
 
-  // Monta a foto/PDF anexado a um recado (imagem aparece direto, PDF vira um
-  // "chip" clicavel que abre o visualizador do app).
+  // Monta a foto/PDF anexado a um recado pra usar em listas (ex: tela de
+  // gestao de recados) - imagem aparece direto, PDF vira um "chip" clicavel
+  // que abre o visualizador do app.
   function renderRecadoAttachment(recadoId, attachment) {
     const url = `/api/recados/${recadoId}/attachment`;
     if (attachment.kind === 'imagem') {
@@ -1499,6 +1500,49 @@
     const chip = el(`<div class="pdf-chip" style="margin-top:8px">📄 ${escapeHtml(attachment.name || 'Documento PDF')}</div>`);
     chip.addEventListener('click', () => openPdfViewer(url));
     return chip;
+  }
+
+  // Igual acima, mas para o popup de ciencia obrigatoria: aqui a imagem OU o
+  // PDF aparecem prontos na tela, sem precisar clicar em nada pra abrir.
+  function renderRecadoAttachmentAuto(container, recadoId, attachment) {
+    const url = `/api/recados/${recadoId}/attachment`;
+    if (attachment.kind === 'imagem') {
+      const img = el(`<img class="chat-thumb" style="max-width:100%;max-height:none;margin-top:8px" src="${url}" oncontextmenu="return false" draggable="false" />`);
+      img.addEventListener('click', () => openImageViewer(url));
+      container.appendChild(img);
+      return;
+    }
+    // PDF: renderiza as paginas direto dentro do card, igual ao visualizador
+    // do chat, mas sem precisar abrir nada separado.
+    const wrap = document.createElement('div');
+    wrap.style.marginTop = '8px';
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.gap = '10px';
+    container.appendChild(wrap);
+    (async () => {
+      try {
+        const res = await fetch(url, { credentials: 'same-origin' });
+        const buf = await res.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const viewport = page.getViewport({ scale: 1.1 });
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.style.maxWidth = '100%';
+          canvas.style.borderRadius = '8px';
+          canvas.oncontextmenu = () => false;
+          wrap.appendChild(canvas);
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        }
+      } catch (err) {
+        const chip = el(`<div class="pdf-chip">📄 ${escapeHtml(attachment.name || 'Documento PDF')} (toque para abrir)</div>`);
+        chip.addEventListener('click', () => openPdfViewer(url));
+        wrap.appendChild(chip);
+      }
+    })();
   }
 
   document.getElementById('btn-recado-ack').addEventListener('click', async () => {
