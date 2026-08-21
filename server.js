@@ -1071,8 +1071,43 @@ const upload = multer({
   }
 });
 
-app.post('/api/turmas/:id/attachments', requireAuth, requireTurmaMember, upload.single('file'), (req, res) => {
+// "sharp" e opcional na pratica: se por algum motivo nao instalar certinho no
+// servidor, o app continua funcionando normalmente (so sem comprimir fotos).
+let sharp;
+try { sharp = require('sharp'); } catch (err) { sharp = null; console.error('sharp indisponivel, fotos nao serao comprimidas:', err.message); }
+
+// Redimensiona e recomprime uma foto recem-enviada, direto em cima do
+// arquivo que o multer ja salvou em disco, antes de registrar a mensagem.
+// Isso reduz bastante o espaco em disco por foto e, principalmente, o
+// bandwidth gasto toda vez que alguem abre essa mesma foto depois (o app
+// serve sempre o arquivo inteiro, sem redimensionar na hora). Fotos de
+// celular costumam vir enormes (4000px+) sem necessidade nenhuma numa tela
+// de chat. GIF (pode ser animado) e PDF nao sao mexidos.
+async function compressUploadedImage(file) {
+  if (!file || !sharp) return;
+  const formatByMime = { 'image/jpeg': 'jpeg', 'image/png': 'png', 'image/webp': 'webp' };
+  const format = formatByMime[file.mimetype];
+  if (!format) return;
+  const filePath = path.join(UPLOAD_DIR, file.filename);
+  try {
+    const originalSize = fs.statSync(filePath).size;
+    const buffer = await sharp(filePath)
+      .rotate() // aplica a rotacao correta com base no EXIF antes de descartar os metadados
+      .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+      [format]({ quality: 78 })
+      .toBuffer();
+    if (buffer.length < originalSize) {
+      fs.writeFileSync(filePath, buffer);
+      file.size = buffer.length;
+    }
+  } catch (err) {
+    console.error('Erro ao comprimir imagem, mantendo o arquivo original:', err.message);
+  }
+}
+
+app.post('/api/turmas/:id/attachments', requireAuth, requireTurmaMember, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+  await compressUploadedImage(req.file);
   const kind = req.file.mimetype === 'application/pdf' ? 'pdf' : 'imagem';
   const info = db.prepare(`
     INSERT INTO attachments (turma_id, uploader_id, filename, original_name, mime, kind)
@@ -1094,7 +1129,14 @@ app.get('/api/attachments/:id', requireAuth, (req, res) => {
   res.setHeader('Content-Type', att.mime);
   res.setHeader('Content-Disposition', 'inline'); // sem nome de arquivo -> nao sugere "salvar como"
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'private, no-store');
+  // "private" = so fica guardado no navegador da propria pessoa (nunca num
+  // proxy/CDN compartilhado); o conteudo de um anexo nunca muda depois de
+  // enviado, entao pode ficar em cache por dias sem risco de mostrar
+  // desatualizado - isso evita rebaixar o mesmo arquivo toda vez que a
+  // pessoa reabre a mesma foto/PDF, economizando bastante bandwidth no
+  // plano do Render. Nao afeta a protecao contra download (sem "salvar
+  // como", sem menu de clique-direito na imagem/PDF).
+  res.setHeader('Cache-Control', 'private, max-age=604800, immutable');
   fs.createReadStream(filePath).pipe(res);
 });
 
@@ -1652,8 +1694,9 @@ app.get('/api/conversations/:id/messages', requireAuth, requireConversationParti
   });
 });
 
-app.post('/api/conversations/:id/attachments', requireAuth, requireConversationParticipant, upload.single('file'), (req, res) => {
+app.post('/api/conversations/:id/attachments', requireAuth, requireConversationParticipant, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
+  await compressUploadedImage(req.file);
   const kind = req.file.mimetype === 'application/pdf' ? 'pdf' : 'imagem';
   const info = db.prepare(`
     INSERT INTO attachments (conversation_id, uploader_id, filename, original_name, mime, kind)
@@ -1783,13 +1826,14 @@ function getAnnouncementAttachment(a) {
 
 // Cria um recado novo (texto e/ou uma imagem/PDF - "banner") e avisa ao vivo
 // (via socket) quem precisa ver.
-app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), upload.single('file'), (req, res) => {
+app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), upload.single('file'), async (req, res) => {
   const { message, audienceType, turmaId } = req.body;
   const hasText = message && message.trim();
   const hasFile = !!req.file;
   if (!hasText && !hasFile) {
     return res.status(400).json({ error: 'Escreva o recado ou anexe uma imagem/PDF' });
   }
+  await compressUploadedImage(req.file);
   if (!['all', 'turma'].includes(audienceType)) {
     return res.status(400).json({ error: 'Escolha para quem e o recado' });
   }
@@ -1866,7 +1910,10 @@ app.get('/api/recados/:id/attachment', requireAuth, (req, res) => {
   res.setHeader('Content-Type', announcement.attachment_mime);
   res.setHeader('Content-Disposition', 'inline');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'private, no-store');
+  // Mesmo raciocinio do endpoint de anexos da turma/DM: conteudo imutavel,
+  // pode cachear no navegador da propria pessoa por dias pra economizar
+  // bandwidth (o recado some sozinho quando cancelado, mesmo com cache).
+  res.setHeader('Cache-Control', 'private, max-age=604800, immutable');
   fs.createReadStream(filePath).pipe(res);
 });
 

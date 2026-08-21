@@ -54,6 +54,15 @@ Para o aplicativo não crescer sem parar no disco do Render (o que custaria mais
 
 ⚠️ **Isso é definitivo para o chat de turma** — depois de 5 dias não tem como recuperar aquela mensagem/foto/PDF, nem eu consigo trazer de volta. Se sua creche precisa guardar esse histórico por mais tempo (ex: para prestação de contas ou registro pedagógico), me avise que ajusto o prazo (ou desligo essa limpeza automática) facilmente no código (`server.js`, constantes `TURMA_MESSAGE_LIFETIME_DAYS` e `DM_MESSAGE_LIFETIME_DAYS`, ambas em 5 dias hoje).
 
+## 📶 Bandwidth (diferente de espaço em disco)
+
+O plano do Render tem dois limites separados: **espaço em disco** (quanto fica guardado, veja a seção acima) e **bandwidth** (quantos dados são baixados por mês, toda vez que alguém abre uma foto/PDF/página). O plano Hobby inclui 5 GB de bandwidth por mês; passando disso, o Render cobra automaticamente. Esse número reseta todo início de mês.
+
+Duas mudanças reduzem bastante esse consumo:
+
+- **Fotos são comprimidas automaticamente ao enviar**: toda foto enviada no chat da turma, em conversa privada ou num recado é redimensionada (no máximo 1600px no lado maior) e recomprimida antes de ser guardada — sem perda visível numa tela de celular/computador, mas ocupando bem menos espaço e bandwidth por foto. PDFs e GIFs animados não são mexidos. Isso depende do pacote `sharp` (já incluído no `package.json`); se por algum motivo ele não instalar no servidor, o app continua funcionando normalmente, só sem comprimir.
+- **Fotos e PDFs agora ficam em cache no navegador de cada pessoa por até 7 dias**: antes, toda vez que alguém reabria a mesma foto/PDF (ex: rolando o chat de novo), o arquivo inteiro era baixado de novo do servidor. Agora o navegador guarda uma cópia local depois da primeira vez. Isso **não** afeta a proteção contra download: continua sem botão de "salvar como" e sem menu de clique-direito nas imagens/PDFs — só evita rebaixar o mesmo arquivo à toa.
+
 ## 📲 Instalar como aplicativo no celular
 
 **Android (Chrome):** ao abrir o site, aparece um botão **"📲 Instalar app no celular"** na tela de login (ou **"📲 Instalar"** no topo, depois de logado). É só tocar nele e confirmar. O ícone aparece na tela inicial do celular igual a qualquer outro app.
@@ -101,6 +110,8 @@ O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas fo
 **Sobre a atualização de "editar/excluir turma", "retenção de mensagens", "auditoria" e "recados"**: adiciona duas tabelas novas (`announcements`, já com as colunas do anexo de imagem/PDF, e `announcement_acks`) — também **não apaga nem exige recadastro de ninguém**. A limpeza automática de mensagens de turma com mais de 5 dias começa a rodar a partir do primeiro deploy desta versão (ela também apaga, aos poucos, qualquer mensagem de turma que já tinha mais de 5 dias antes da atualização).
 
 **Sobre a atualização de "reagir com 👍/❤️"**: adiciona uma tabela nova (`message_reactions`) — também **não apaga nem exige recadastro de ninguém**.
+
+**Sobre a atualização de "bandwidth"**: adiciona uma dependência nova no `package.json` (`sharp`, usada para comprimir fotos) — o Render instala ela sozinho no próximo deploy, não precisa fazer nada manualmente. Não mexe em nenhuma tabela do banco.
 
 ## Como rodar localmente
 
