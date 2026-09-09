@@ -308,8 +308,9 @@ button {
 table.fin-table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; font-size: 13px; }
 table.fin-table th, table.fin-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
 table.fin-table th { background: #fafafa; color: var(--gray-light); font-size: 11px; text-transform: uppercase; }
-table.fin-table td.amount-receita { color: var(--green); font-weight: 600; }
-table.fin-table td.amount-despesa { color: var(--red); font-weight: 600; }
+.amount-receita { color: var(--green); }
+.amount-despesa { color: var(--red); }
+table.fin-table td.amount-receita, table.fin-table td.amount-despesa { font-weight: 600; }
 
 /* ---------- Calendario escolar ---------- */
 .cal-nav { display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 10px; }
@@ -404,6 +405,20 @@ form { margin: 0; }
 }
 .reply-quote b { display: block; color: var(--red); font-size: 11px; }
 .reply-quote span { display: block; color: var(--gray-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Editar mensagem / mensagem fixada ---------- */
+.edited-badge { color: var(--gray-light); font-style: italic; font-size: 11px; }
+.edit-box { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.edit-textarea {
+  width: 100%; font-family: inherit; font-size: 14px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 8px; resize: vertical;
+}
+.edit-box-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.edit-box-actions .btn { padding: 4px 10px; font-size: 12px; }
+.pinned-note {
+  font-size: 11px; color: var(--orange); font-weight: 600;
+  margin-bottom: 4px; display: flex; align-items: center; gap: 4px;
+}
 
 /* ---------- Enquete (poll) ---------- */
 .poll-box {

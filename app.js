@@ -14,12 +14,15 @@
   const DIRECAO_ROLES = ['diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
   const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica', 'gestor'];
   const FORWARD_TARGET_ROLES = ['professora_regente', 'secretaria', 'coordenadora_pedagogica', 'diretora', 'gestor'];
-  const POLL_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
+  // Quem pode editar a propria mensagem no chat da turma, e quem pode criar
+  // uma enquete (nunca responsavel, nunca cozinha) - mesmo grupo pras duas coisas.
+  const EDIT_MENSAGEM_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
+  const ENQUETE_CREATE_ROLES = EDIT_MENSAGEM_ROLES;
   const TURMA_MANAGE_ROLES = DIRECAO_ROLES; // criar, editar (renomear) ou excluir turma
   const AUDIT_DM_ROLES = DIRECAO_ROLES; // consultar qualquer conversa privada (auditoria)
   const RECADO_CREATE_ROLES = DIRECAO_ROLES; // criar recado com ciencia obrigatoria
 
-  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios', 'auditoria', 'recados'];
+  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios', 'auditoria', 'recados', 'enquetes'];
 
   const state = {
     user: null,
@@ -33,6 +36,7 @@
     replyingTo: null, // { id, authorName, snippet } - mensagem da turma que estou respondendo
     myPollVotes: {}, // pollId -> optionId que eu escolhi (cache local pra nao perder o "selecionado" em updates ao vivo)
     recadoQueue: [], // recados pendentes de ciencia, mostrados um de cada vez
+    enqueteQueue: [], // enquetes pendentes de voto, mostradas um de cada vez (depois dos recados)
     auditoriaConversations: []
   };
 
@@ -344,6 +348,7 @@
     document.getElementById('nav-usuarios').classList.toggle('hidden', !DIRECAO_ROLES.includes(state.user.role));
     document.getElementById('nav-auditoria').classList.toggle('hidden', !AUDIT_DM_ROLES.includes(state.user.role));
     document.getElementById('nav-recados').classList.toggle('hidden', !RECADO_CREATE_ROLES.includes(state.user.role));
+    document.getElementById('nav-enquetes').classList.toggle('hidden', !ENQUETE_CREATE_ROLES.includes(state.user.role));
 
     connectSocket();
     setupNav();
@@ -484,6 +489,16 @@
     state.socket.on('message_reaction_update', (info) => {
       applyReactionUpdate(info);
     });
+    // Uma mensagem da turma aberta foi editada por quem enviou
+    state.socket.on('message_edited', (info) => {
+      if (state.chat && state.chat.type === 'turma' && info.turmaId === state.chat.id) {
+        applyMessageEdited(info.id, info.content, info.editedAt);
+      }
+    });
+    // Uma mensagem da turma aberta foi fixada/desafixada
+    state.socket.on('message_pin_update', (info) => {
+      applyMessagePinUpdate(info);
+    });
     // Mensagem de turma completou 5 dias e foi apagada de vez (limpeza
     // automatica) - some da tela sem deixar "mensagem removida", pois nem
     // existe mais no banco.
@@ -512,6 +527,24 @@
     state.socket.on('recado_canceled', ({ announcementId }) => {
       state.recadoQueue = state.recadoQueue.filter(q => q.id !== announcementId);
       showNextRecado();
+    });
+    // Chegou uma enquete nova enquanto eu ja estava com o app aberto - busca
+    // os dados completos e entra na fila (depois dos recados pendentes).
+    state.socket.on('new_enquete', () => {
+      checkPendingEnquetes();
+    });
+    // Alguem votou numa enquete que eu criei - atualiza a tela de gestao se estiver aberta.
+    state.socket.on('enquete_vote_update', () => {
+      const modal = document.querySelector('#modal-root .modal-backdrop[data-enquete-id]');
+      if (modal) openEnqueteResultsModal(Number(modal.dataset.enqueteId));
+      if (document.getElementById('view-enquetes') && !document.getElementById('view-enquetes').classList.contains('hidden')) {
+        loadEnquetesScreen();
+      }
+    });
+    // Uma enquete foi cancelada antes de eu votar - tira da fila.
+    state.socket.on('enquete_canceled', ({ enqueteId }) => {
+      state.enqueteQueue = state.enqueteQueue.filter(q => q.id !== enqueteId);
+      showNextEnquete();
     });
     // Uma turma foi renomeada - atualiza o titulo se essa turma estiver aberta agora
     state.socket.on('turma_renamed', (info) => {
@@ -572,6 +605,7 @@
     if (name === 'usuarios') loadUsuarios();
     if (name === 'auditoria') loadAuditoria();
     if (name === 'recados') loadRecadosScreen();
+    if (name === 'enquetes') loadEnquetesScreen();
   }
 
   function leaveChatSocketIfNeeded() {
@@ -708,7 +742,6 @@
     document.getElementById('chat-turma-name').innerHTML = escapeHtml(turma.name);
     document.getElementById('btn-invite').classList.remove('hidden');
     document.getElementById('btn-members').classList.remove('hidden');
-    document.getElementById('btn-poll').classList.toggle('hidden', !POLL_CREATE_ROLES.includes(state.user.role));
     document.getElementById('chat-input-bar').classList.remove('hidden');
     document.getElementById('audit-note').classList.add('hidden');
     document.getElementById('chat-messages').innerHTML = '';
@@ -823,7 +856,7 @@
     const isTurma = state.chat && state.chat.type === 'turma';
     const wrap = el(`<div class="msg ${mine ? 'mine' : ''}" data-msg-id="${msg.id}"></div>`);
     const meta = el(`<div class="meta"></div>`);
-    meta.innerHTML = `${avatarHtml(msg.user, 'small')} <b>${escapeHtml(msg.user.name)}</b> ${roleBadge(msg.user.role, msg.user.roleLabel)} <span>${fmtDateTime(msg.createdAt)}</span>`;
+    meta.innerHTML = `${avatarHtml(msg.user, 'small')} <b>${escapeHtml(msg.user.name)}</b> ${roleBadge(msg.user.role, msg.user.roleLabel)} <span>${fmtDateTime(msg.createdAt)}</span>${msg.editedAt ? ' <span class="edited-badge">(editado)</span>' : ''}`;
     if (isTurma && !msg.deleted) {
       const replyBtn = el(`<button class="msg-del" title="Responder">↩️</button>`);
       replyBtn.addEventListener('click', () => startReplyTo(msg));
@@ -832,6 +865,16 @@
         const fwdBtn = el(`<button class="msg-del" title="Encaminhar para outras turmas">↪️</button>`);
         fwdBtn.addEventListener('click', () => openForwardModal(msg));
         meta.appendChild(fwdBtn);
+      }
+      if (msg.canEdit) {
+        const editBtn = el(`<button class="msg-del" title="Editar mensagem">✏️</button>`);
+        editBtn.addEventListener('click', () => startEditMessage(msg));
+        meta.appendChild(editBtn);
+      }
+      if (msg.canPin) {
+        const pinBtn = el(`<button class="msg-del msg-pin-btn" title="${msg.pinned ? 'Desafixar mensagem' : 'Fixar mensagem'}">${msg.pinned ? '📍' : '📌'}</button>`);
+        pinBtn.addEventListener('click', () => togglePinMessage(msg.id));
+        meta.appendChild(pinBtn);
       }
     }
     if (msg.canDelete) {
@@ -851,6 +894,10 @@
       bubble.classList.add('deleted');
       bubble.textContent = msg.deletedByName ? `Mensagem removida por ${msg.deletedByName}` : 'Mensagem removida';
     } else {
+      if (msg.pinned) {
+        const pinnedNote = el(`<div class="pinned-note">📌 Fixado${msg.pinnedByName ? ' por ' + escapeHtml(msg.pinnedByName) : ''}</div>`);
+        bubble.appendChild(pinnedNote);
+      }
       if (msg.replyTo) {
         const quote = el(`<div class="reply-quote"></div>`);
         quote.innerHTML = `<b>${escapeHtml(msg.replyTo.authorName || '')}</b><span>${escapeHtml(msg.replyTo.snippet || '')}</span>`;
@@ -862,6 +909,7 @@
       }
       if (msg.content) {
         const p = document.createElement('div');
+        p.className = 'msg-text';
         p.textContent = msg.content;
         bubble.appendChild(p);
       }
@@ -900,6 +948,107 @@
     }
 
     document.getElementById('chat-messages').appendChild(wrap);
+  }
+
+  // ------------------------------------------------------------------
+  // Editar mensagem enviada na turma (so professora regente/auxiliar,
+  // estagiaria e direcao/gestor, e so a propria mensagem)
+  // ------------------------------------------------------------------
+  function startEditMessage(msg) {
+    const wrap = document.querySelector(`#chat-messages [data-msg-id="${msg.id}"]`);
+    if (!wrap) return;
+    const bubble = wrap.querySelector('.bubble');
+    if (bubble.querySelector('.edit-box')) return; // ja esta editando
+    const textEl = bubble.querySelector('.msg-text');
+    if (textEl) textEl.classList.add('hidden');
+    const box = el(`<div class="edit-box">
+      <textarea class="edit-textarea" rows="2"></textarea>
+      <div class="edit-box-actions">
+        <button type="button" class="btn ghost" data-cancel-edit>Cancelar</button>
+        <button type="button" class="btn" data-save-edit>Salvar</button>
+      </div>
+      <div class="error-msg" data-edit-error></div>
+    </div>`);
+    bubble.appendChild(box);
+    const textarea = box.querySelector('.edit-textarea');
+    textarea.value = msg.content || '';
+    textarea.focus();
+    box.querySelector('[data-cancel-edit]').addEventListener('click', () => {
+      box.remove();
+      if (textEl) textEl.classList.remove('hidden');
+    });
+    box.querySelector('[data-save-edit]').addEventListener('click', async () => {
+      const newContent = textarea.value.trim();
+      try {
+        const data = await api(`/api/messages/${msg.id}`, { method: 'PUT', body: { content: newContent } });
+        box.remove();
+        applyMessageEdited(msg.id, data.content, data.editedAt);
+      } catch (err) {
+        box.querySelector('[data-edit-error]').textContent = err.message;
+      }
+    });
+  }
+
+  function applyMessageEdited(id, content, editedAt) {
+    const wrap = document.querySelector(`#chat-messages [data-msg-id="${id}"]`);
+    if (!wrap) return;
+    const bubble = wrap.querySelector('.bubble');
+    let textEl = bubble.querySelector('.msg-text');
+    if (content) {
+      if (!textEl) {
+        textEl = document.createElement('div');
+        textEl.className = 'msg-text';
+        const anchor = bubble.querySelector('.chat-thumb, .pdf-chip');
+        if (anchor) bubble.insertBefore(textEl, anchor); else bubble.appendChild(textEl);
+      }
+      textEl.textContent = content;
+      textEl.classList.remove('hidden');
+    } else if (textEl) {
+      textEl.remove();
+    }
+    const meta = wrap.querySelector('.meta');
+    if (editedAt && !meta.querySelector('.edited-badge')) {
+      const badge = document.createElement('span');
+      badge.className = 'edited-badge';
+      badge.textContent = '(editado)';
+      meta.appendChild(badge);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Fixar/desafixar mensagem da turma (so professora regente ou direcao)
+  // ------------------------------------------------------------------
+  async function togglePinMessage(msgId) {
+    try {
+      const data = await api(`/api/messages/${msgId}/pin`, { method: 'POST' });
+      applyMessagePinUpdate({
+        id: msgId, turmaId: state.chat.id, pinned: data.pinned,
+        pinnedByName: data.pinned ? state.user.name : null
+      });
+    } catch (err) {
+      alert('Erro ao fixar/desafixar mensagem: ' + err.message);
+    }
+  }
+
+  function applyMessagePinUpdate(data) {
+    if (!state.chat || state.chat.type !== 'turma' || state.chat.id !== data.turmaId) return;
+    const wrap = document.querySelector(`#chat-messages [data-msg-id="${data.id}"]`);
+    if (!wrap) return;
+    const bubble = wrap.querySelector('.bubble');
+    const existingNote = bubble.querySelector('.pinned-note');
+    if (data.pinned) {
+      if (!existingNote) {
+        const note = el(`<div class="pinned-note">📌 Fixado${data.pinnedByName ? ' por ' + escapeHtml(data.pinnedByName) : ''}</div>`);
+        bubble.insertBefore(note, bubble.firstChild);
+      }
+    } else if (existingNote) {
+      existingNote.remove();
+    }
+    const pinBtn = wrap.querySelector('.msg-pin-btn');
+    if (pinBtn) {
+      pinBtn.textContent = data.pinned ? '📍' : '📌';
+      pinBtn.title = data.pinned ? 'Desafixar mensagem' : 'Fixar mensagem';
+    }
   }
 
   // ------------------------------------------------------------------
@@ -986,51 +1135,12 @@
   }
 
   // ------------------------------------------------------------------
-  // Enquetes na turma
+  // Enquetes de chat (legado): a criacao de enquete direto no chat foi
+  // removida - agora enquete e feita como recado (ver secao propria mais
+  // abaixo). Mantemos so a exibicao/voto, para qualquer enquete antiga que
+  // ainda apareca no chat de alguma turma nos proximos dias (ela some sozinha
+  // junto com a mensagem, na limpeza automatica de 5 dias).
   // ------------------------------------------------------------------
-  document.getElementById('btn-poll').addEventListener('click', () => {
-    if (!state.chat || state.chat.type !== 'turma') return;
-    openPollModal();
-  });
-
-  function openPollModal() {
-    const modal = openModal(`
-      <h3>Criar enquete</h3>
-      <div class="field"><label>Pergunta</label><input type="text" id="poll-question" placeholder="Ex: Qual dia da excursao?" /></div>
-      <div class="field"><label>Opcoes</label>
-        <div id="poll-options-wrap">
-          <input type="text" class="poll-option-input" placeholder="Opcao 1" style="margin-bottom:6px" />
-          <input type="text" class="poll-option-input" placeholder="Opcao 2" style="margin-bottom:6px" />
-        </div>
-        <button type="button" class="btn ghost" id="btn-add-poll-option" style="font-size:12px;padding:4px 10px">+ Adicionar opcao</button>
-      </div>
-      <div class="error-msg" id="poll-error"></div>
-      <div class="modal-actions">
-        <button class="btn secondary" id="cancel-poll">Cancelar</button>
-        <button class="btn" id="confirm-poll">Criar enquete</button>
-      </div>
-    `);
-    document.getElementById('btn-add-poll-option').addEventListener('click', () => {
-      const wrap = document.getElementById('poll-options-wrap');
-      if (wrap.querySelectorAll('.poll-option-input').length >= 8) return;
-      const input = el(`<input type="text" class="poll-option-input" placeholder="Opcao ${wrap.querySelectorAll('.poll-option-input').length + 1}" style="margin-bottom:6px" />`);
-      wrap.appendChild(input);
-    });
-    document.getElementById('cancel-poll').addEventListener('click', closeModal);
-    document.getElementById('confirm-poll').addEventListener('click', async () => {
-      const question = document.getElementById('poll-question').value.trim();
-      const options = Array.from(document.querySelectorAll('.poll-option-input'))
-        .map(i => i.value.trim())
-        .filter(Boolean);
-      try {
-        await api(`/api/turmas/${state.chat.id}/polls`, { method: 'POST', body: { question, options } });
-        closeModal();
-      } catch (err) {
-        document.getElementById('poll-error').textContent = err.message;
-      }
-    });
-  }
-
   function renderPollWidget(poll) {
     const myOptionId = state.myPollVotes.hasOwnProperty(poll.id) ? state.myPollVotes[poll.id] : poll.myOptionId;
     const box = el(`<div class="poll-box" data-poll-id="${poll.id}"></div>`);
@@ -1047,6 +1157,29 @@
       `;
       optBtn.addEventListener('click', () => voteInPoll(poll.id, opt.id));
       box.appendChild(optBtn);
+    });
+    const total = el(`<div class="poll-total"></div>`);
+    total.textContent = poll.totalVotes + (poll.totalVotes === 1 ? ' voto' : ' votos');
+    box.appendChild(total);
+    return box;
+  }
+
+  // Mesma barra de resultados, mas sem clique pra votar - usado na tela de
+  // gestao de enquetes (quem criou/direcao so acompanha, nao vota ali).
+  function renderPollResultsWidget(poll) {
+    const box = el(`<div class="poll-box"></div>`);
+    const q = el(`<div class="poll-question"></div>`);
+    q.textContent = '📊 ' + poll.question;
+    box.appendChild(q);
+    poll.options.forEach(opt => {
+      const pct = poll.totalVotes ? Math.round((opt.count / poll.totalVotes) * 100) : 0;
+      const row = el(`<div class="poll-option" style="cursor:default"></div>`);
+      row.innerHTML = `
+        <div class="poll-option-row"><span class="poll-option-text">${escapeHtml(opt.text)}</span><span class="poll-option-count">${opt.count}</span></div>
+        <div class="poll-bar"><div class="poll-bar-fill" style="width:${pct}%"></div></div>
+        ${opt.voters && opt.voters.length ? `<div class="poll-voters">${opt.voters.map(escapeHtml).join(', ')}</div>` : ''}
+      `;
+      box.appendChild(row);
     });
     const total = el(`<div class="poll-total"></div>`);
     total.textContent = poll.totalVotes + (poll.totalVotes === 1 ? ' voto' : ' votos');
@@ -1292,7 +1425,6 @@
       `${avatarHtml(conv.other, 'small')} ${escapeHtml(conv.other.name)} ${roleBadge(conv.other.role, conv.other.roleLabel)}`;
     document.getElementById('btn-invite').classList.add('hidden');
     document.getElementById('btn-members').classList.add('hidden');
-    document.getElementById('btn-poll').classList.add('hidden');
     document.getElementById('chat-input-bar').classList.remove('hidden');
     document.getElementById('audit-note').classList.add('hidden');
     document.getElementById('chat-messages').innerHTML = '';
@@ -1356,7 +1488,6 @@
     document.getElementById('chat-turma-name').textContent = `${nameA} ↔ ${nameB}`;
     document.getElementById('btn-invite').classList.add('hidden');
     document.getElementById('btn-members').classList.add('hidden');
-    document.getElementById('btn-poll').classList.add('hidden');
     document.getElementById('chat-input-bar').classList.add('hidden');
     document.getElementById('audit-note').classList.remove('hidden');
     document.getElementById('chat-messages').innerHTML = '';
@@ -1460,15 +1591,91 @@
   // ------------------------------------------------------------------
   // Financeiro
   // ------------------------------------------------------------------
-  document.getElementById('fin-month-filter').addEventListener('change', loadFinanceiro);
-  document.getElementById('btn-fin-clear-month').addEventListener('click', () => {
-    document.getElementById('fin-month-filter').value = '';
-    loadFinanceiro();
+  const FIN_MONTH_NAMES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  function finMonthLabel(monthStr) {
+    const [y, m] = monthStr.split('-');
+    return `${FIN_MONTH_NAMES[Number(m) - 1]}/${y}`;
+  }
+
+  document.getElementById('btn-fin-close-detail').addEventListener('click', () => {
+    document.getElementById('fin-month-detail').classList.add('hidden');
   });
 
+  // So mostra o saldo geral por padrao; os meses ficam listados embaixo e so
+  // ao clicar num deles e que aparecem os recebimentos/gastos detalhados.
   async function loadFinanceiro() {
-    const month = document.getElementById('fin-month-filter').value;
-    const data = await api('/api/financeiro' + (month ? '?month=' + month : ''));
+    document.getElementById('fin-month-detail').classList.add('hidden');
+    await refreshFinSummary();
+  }
+
+  // Atualiza saldo geral, lista de meses e parcelas pendentes, sem mexer na
+  // visibilidade do painel de detalhe do mes (usado tambem apos apagar um
+  // lancamento de dentro do detalhe, pra nao fechar o painel).
+  async function refreshFinSummary() {
+    const [all, resumo, pendentes] = await Promise.all([
+      api('/api/financeiro'),
+      api('/api/financeiro/resumo-mensal'),
+      api('/api/financeiro/parcelas-pendentes')
+    ]);
+    document.getElementById('fin-saldo-geral').textContent = fmtBRL(all.totals.saldo);
+
+    const monthsList = document.getElementById('fin-months-list');
+    monthsList.innerHTML = '';
+    if (!resumo.meses.length) {
+      monthsList.innerHTML = '<div class="empty-state">Nenhum lançamento ainda.</div>';
+    } else {
+      resumo.meses.forEach((m) => {
+        const row = el(`<div class="member-row" style="cursor:pointer" data-month="${m.month}">
+          <div><div class="name">${finMonthLabel(m.month)}</div></div>
+          <div class="spacer"></div>
+          <div class="amount-${m.saldo >= 0 ? 'receita' : 'despesa'}" style="font-weight:600">${fmtBRL(m.saldo)}</div>
+        </div>`);
+        row.addEventListener('click', () => openFinMonthDetail(m.month));
+        monthsList.appendChild(row);
+      });
+    }
+
+    const pendWrap = document.getElementById('fin-parcelas-pendentes-wrap');
+    const pendList = document.getElementById('fin-parcelas-pendentes-list');
+    pendList.innerHTML = '';
+    if (pendentes.pendentes.length) {
+      pendWrap.classList.remove('hidden');
+      pendentes.pendentes.forEach((item) => {
+        const row = el(`<div class="member-row">
+          <div>
+            <div class="name">${escapeHtml(item.description)}</div>
+            <div class="child">Vence em ${item.date.split('-').reverse().join('/')} · lançado por ${escapeHtml(item.author_name)}</div>
+          </div>
+          <div class="spacer"></div>
+          <div class="amount-despesa" style="font-weight:600">${fmtBRL(item.amount)}</div>
+          ${FIN_MANAGE_ROLES.includes(state.user.role) ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:8px" data-quitar="${item.id}">quitar agora</button>` : ''}
+          ${FIN_DELETE_ROLES.includes(state.user.role) ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:4px" data-del-parcela="${item.id}">x</button>` : ''}
+        </div>`);
+        const quitarBtn = row.querySelector('[data-quitar]');
+        if (quitarBtn) quitarBtn.addEventListener('click', async () => {
+          try {
+            await api(`/api/financeiro/${item.id}/quitar`, { method: 'POST' });
+            loadFinanceiro();
+          } catch (err) {
+            alert('Erro ao quitar: ' + err.message);
+          }
+        });
+        const delBtn = row.querySelector('[data-del-parcela]');
+        if (delBtn) delBtn.addEventListener('click', async () => {
+          if (!confirm('Remover esta parcela?')) return;
+          await api('/api/financeiro/' + item.id, { method: 'DELETE' });
+          loadFinanceiro();
+        });
+        pendList.appendChild(row);
+      });
+    } else {
+      pendWrap.classList.add('hidden');
+    }
+  }
+
+  async function openFinMonthDetail(month) {
+    const data = await api('/api/financeiro?month=' + month);
+    document.getElementById('fin-detail-title').textContent = finMonthLabel(month);
     document.getElementById('fin-receitas').textContent = fmtBRL(data.totals.receitas);
     document.getElementById('fin-despesas').textContent = fmtBRL(data.totals.despesas);
     document.getElementById('fin-saldo').textContent = fmtBRL(data.totals.saldo);
@@ -1487,10 +1694,12 @@
       if (delBtn) delBtn.addEventListener('click', async () => {
         if (!confirm('Remover este lancamento?')) return;
         await api('/api/financeiro/' + item.id, { method: 'DELETE' });
-        loadFinanceiro();
+        await refreshFinSummary();
+        openFinMonthDetail(month);
       });
       tbody.appendChild(tr);
     });
+    document.getElementById('fin-month-detail').classList.remove('hidden');
   }
 
   // ------------------------------------------------------------------
@@ -1498,6 +1707,7 @@
   // ------------------------------------------------------------------
 
   // Busca recados pendentes e comeca a mostrar um de cada vez, em tela cheia.
+  // Enquetes pendentes so comecam a aparecer depois que os recados acabarem.
   async function checkPendingRecados() {
     try {
       const data = await api('/api/recados/pending');
@@ -1508,12 +1718,14 @@
     } catch (err) {
       // silencioso: nao trava o app se essa checagem falhar
     }
+    checkPendingEnquetes();
   }
 
   function showNextRecado() {
     const overlay = document.getElementById('recado-overlay');
     if (!state.recadoQueue.length) {
       overlay.classList.add('hidden');
+      showNextEnquete();
       return;
     }
     const r = state.recadoQueue[0];
@@ -1746,6 +1958,194 @@
   });
 
   // ------------------------------------------------------------------
+  // Enquetes avulsas - mesma logica dos recados: tela cheia obrigatoria ate
+  // votar, mostrada so depois que os recados pendentes acabarem.
+  // ------------------------------------------------------------------
+  async function checkPendingEnquetes() {
+    try {
+      const data = await api('/api/enquetes/pending');
+      data.pending.forEach((e) => {
+        if (!state.enqueteQueue.some(q => q.id === e.id)) state.enqueteQueue.push(e);
+      });
+      // So mostra a enquete se nao tiver recado pendente travando a tela agora.
+      if (document.getElementById('recado-overlay').classList.contains('hidden')) {
+        showNextEnquete();
+      }
+    } catch (err) {
+      // silencioso: nao trava o app se essa checagem falhar
+    }
+  }
+
+  function showNextEnquete() {
+    const overlay = document.getElementById('enquete-overlay');
+    if (!state.enqueteQueue.length) {
+      overlay.classList.add('hidden');
+      return;
+    }
+    const e = state.enqueteQueue[0];
+    document.getElementById('enquete-author').textContent = e.createdByName ? `Enviado por ${e.createdByName}` : '';
+    document.getElementById('enquete-question').textContent = e.question;
+    const wrap = document.getElementById('enquete-options-wrap');
+    wrap.innerHTML = '';
+    const voteBtn = document.getElementById('btn-enquete-vote');
+    voteBtn.disabled = true;
+    let selectedId = null;
+    e.options.forEach((opt) => {
+      const optBtn = el(`<button type="button" class="poll-option" data-option-id="${opt.id}"><div class="poll-option-row"><span class="poll-option-text">${escapeHtml(opt.text)}</span></div></button>`);
+      optBtn.addEventListener('click', () => {
+        selectedId = opt.id;
+        wrap.querySelectorAll('.poll-option').forEach(b => b.classList.remove('selected'));
+        optBtn.classList.add('selected');
+        voteBtn.disabled = false;
+      });
+      wrap.appendChild(optBtn);
+    });
+    voteBtn.onclick = async () => {
+      if (selectedId == null) return;
+      voteBtn.disabled = true;
+      try {
+        await api(`/api/enquetes/${e.id}/vote`, { method: 'POST', body: { optionId: selectedId } });
+        state.enqueteQueue.shift();
+        showNextEnquete();
+      } catch (err) {
+        alert('Erro ao votar: ' + err.message);
+        voteBtn.disabled = false;
+      }
+    };
+    overlay.classList.remove('hidden');
+  }
+
+  async function loadEnquetesScreen() {
+    let enquetes = [];
+    try {
+      const data = await api('/api/enquetes');
+      enquetes = data.enquetes;
+    } catch (err) {
+      document.getElementById('enquetes-list').innerHTML = `<div class="empty-state">Erro ao carregar: ${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    const list = document.getElementById('enquetes-list');
+    list.innerHTML = '';
+    if (!enquetes.length) {
+      list.innerHTML = '<div class="empty-state">Nenhuma enquete criada ainda.</div>';
+      return;
+    }
+    enquetes.forEach((e) => {
+      const audience = e.audienceType === 'turma' ? `Turma: ${escapeHtml(e.turmaName || '?')}` : 'Todo mundo';
+      const card = el(`<div class="recado-card-admin${e.canceled ? ' canceled' : ''}"></div>`);
+      const questionEl = el(`<div class="recado-admin-msg">📊 ${escapeHtml(e.question)}</div>`);
+      card.appendChild(questionEl);
+      if (e.poll) card.appendChild(renderPollResultsWidget(e.poll));
+      const metaEl = el(`<div class="recado-admin-meta">
+        <span>${audience} · por ${escapeHtml(e.createdByName)} · ${fmtDateTime(e.createdAt)}${e.canceled ? ' · <b>cancelado</b>' : ''}</span>
+        <span>
+          <span class="recado-admin-progress">${e.votedCount}/${e.total} votaram</span>
+          <button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:8px" data-view-results="${e.id}">ver lista</button>
+          ${(!e.canceled && e.canCancel) ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:4px" data-cancel-enquete="${e.id}">cancelar</button>` : ''}
+        </span>
+      </div>`);
+      card.appendChild(metaEl);
+      card.querySelector('[data-view-results]').addEventListener('click', () => openEnqueteResultsModal(e.id));
+      const cancelBtn = card.querySelector('[data-cancel-enquete]');
+      if (cancelBtn) cancelBtn.addEventListener('click', async () => {
+        if (!confirm('Cancelar esta enquete? Quem ainda nao votou deixa de receber.')) return;
+        try {
+          await api(`/api/enquetes/${e.id}`, { method: 'DELETE' });
+          loadEnquetesScreen();
+        } catch (err) {
+          alert('Erro ao cancelar: ' + err.message);
+        }
+      });
+      list.appendChild(card);
+    });
+  }
+
+  async function openEnqueteResultsModal(enqueteId) {
+    let data;
+    try {
+      data = await api(`/api/enquetes/${enqueteId}/resultados`);
+    } catch (err) {
+      alert('Erro ao carregar resultados: ' + err.message);
+      return;
+    }
+    const rows = data.voters.people.map(p => `
+      <div class="acks-row">
+        <span>${escapeHtml(p.name)}</span>
+        <span class="${p.voted ? 'ack-yes' : 'ack-no'}">${p.voted ? '✔ votou' : 'aguardando'}</span>
+      </div>`).join('');
+    const modal = openModal(`
+      <h3>Resultado (${data.voters.votedCount}/${data.voters.total})</h3>
+      <div id="enquete-results-widget" style="margin-bottom:12px"></div>
+      <div class="acks-list">${rows || '<p>Ninguem na audiencia desta enquete.</p>'}</div>
+      <div class="modal-actions"><button class="btn secondary" id="close-enquete-results">Fechar</button></div>
+    `);
+    if (data.poll) document.getElementById('enquete-results-widget').appendChild(renderPollResultsWidget(data.poll));
+    document.getElementById('close-enquete-results').addEventListener('click', closeModal);
+    modal.dataset.enqueteId = enqueteId;
+  }
+
+  document.getElementById('btn-new-enquete').addEventListener('click', async () => {
+    let turmas = [];
+    try {
+      const data = await api('/api/turmas/all');
+      turmas = data.turmas;
+    } catch (err) { /* segue sem a lista de turmas se falhar */ }
+    openModal(`
+      <h3>Nova enquete</h3>
+      <p style="font-size:13px;color:#666">Aparece em tela cheia assim que a pessoa abrir o app, e so some depois que ela votar.</p>
+      <div class="field"><label>Pergunta</label><input type="text" id="enquete-question-input" placeholder="Ex: Qual dia da excursao?" /></div>
+      <div class="field"><label>Opcoes</label>
+        <div id="enquete-options-input-wrap">
+          <input type="text" class="enquete-option-input" placeholder="Opcao 1" style="margin-bottom:6px" />
+          <input type="text" class="enquete-option-input" placeholder="Opcao 2" style="margin-bottom:6px" />
+        </div>
+        <button type="button" class="btn ghost" id="btn-add-enquete-option" style="font-size:12px;padding:4px 10px">+ Adicionar opcao</button>
+      </div>
+      <div class="field"><label>Para quem</label>
+        <select id="enquete-audience">
+          <option value="all">Todo mundo</option>
+          <option value="turma">Uma turma especifica</option>
+        </select>
+      </div>
+      <div class="field hidden" id="enquete-turma-field"><label>Turma</label>
+        <select id="enquete-turma">${turmas.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')}</select>
+      </div>
+      <div class="error-msg" id="enquete-create-error"></div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="cancel-enquete-create">Cancelar</button>
+        <button class="btn" id="confirm-enquete-create">Enviar</button>
+      </div>
+    `);
+    document.getElementById('enquete-audience').addEventListener('change', (e2) => {
+      document.getElementById('enquete-turma-field').classList.toggle('hidden', e2.target.value !== 'turma');
+    });
+    document.getElementById('btn-add-enquete-option').addEventListener('click', () => {
+      const wrap = document.getElementById('enquete-options-input-wrap');
+      if (wrap.querySelectorAll('.enquete-option-input').length >= 8) return;
+      const input = el(`<input type="text" class="enquete-option-input" placeholder="Opcao ${wrap.querySelectorAll('.enquete-option-input').length + 1}" style="margin-bottom:6px" />`);
+      wrap.appendChild(input);
+    });
+    document.getElementById('cancel-enquete-create').addEventListener('click', closeModal);
+    document.getElementById('confirm-enquete-create').addEventListener('click', async () => {
+      const question = document.getElementById('enquete-question-input').value.trim();
+      const options = Array.from(document.querySelectorAll('.enquete-option-input')).map(i => i.value.trim()).filter(Boolean);
+      const audienceType = document.getElementById('enquete-audience').value;
+      const turmaId = audienceType === 'turma' ? Number(document.getElementById('enquete-turma').value) : null;
+      if (audienceType === 'turma' && !turmaId) {
+        document.getElementById('enquete-create-error').textContent = 'Escolha uma turma';
+        return;
+      }
+      try {
+        await api('/api/enquetes', { method: 'POST', body: { question, options, audienceType, turmaId } });
+        closeModal();
+        loadEnquetesScreen();
+      } catch (err) {
+        document.getElementById('enquete-create-error').textContent = err.message;
+      }
+    });
+  });
+
+  // ------------------------------------------------------------------
   // Usuarios / redefinir senha (para direcao e gestor)
   // ------------------------------------------------------------------
   let usuariosCache = [];
@@ -1915,30 +2315,77 @@
   document.getElementById('btn-new-lancamento').addEventListener('click', () => {
     openModal(`
       <h3>Novo lancamento</h3>
-      <div class="field"><label>Data</label><input type="date" id="fin-date" value="${todayStr()}" /></div>
       <div class="field"><label>Tipo</label>
         <select id="fin-type"><option value="receita">Receita</option><option value="despesa">Despesa</option></select>
       </div>
-      <div class="field"><label>Descricao</label><input id="fin-desc" placeholder="Ex: Mensalidade / Compra de material de limpeza" /></div>
-      <div class="field"><label>Valor (R$)</label><input type="number" id="fin-amount" min="0" step="0.01" /></div>
+      <div class="field hidden" id="fin-parcelado-field" style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="fin-is-parcelado" style="width:18px;height:18px" />
+        <label for="fin-is-parcelado" style="margin:0">Despesa parcelada (crediário)</label>
+      </div>
+
+      <div id="fin-simples-fields">
+        <div class="field"><label>Data</label><input type="date" id="fin-date" value="${todayStr()}" /></div>
+        <div class="field"><label>Descricao</label><input id="fin-desc" placeholder="Ex: Mensalidade / Compra de material de limpeza" /></div>
+        <div class="field"><label>Valor (R$)</label><input type="number" id="fin-amount" min="0" step="0.01" /></div>
+      </div>
+
+      <div id="fin-parcelado-fields" class="hidden">
+        <div class="field"><label>Descricao da compra</label><input id="fin-parc-desc" placeholder="Ex: Compra de berços - Loja X" /></div>
+        <div class="field"><label>Valor total (R$)</label><input type="number" id="fin-parc-total" min="0" step="0.01" /></div>
+        <div class="field"><label>Numero de parcelas</label><input type="number" id="fin-parc-num" min="2" max="48" value="2" /></div>
+        <div class="field"><label>Vencimento da 1ª parcela</label><input type="date" id="fin-parc-primeira" value="${todayStr()}" /></div>
+        <p style="font-size:12px;color:#666;margin:-4px 0 0">As demais parcelas vencem um mes depois da anterior. Cada parcela so entra no saldo quando vencer (ou se alguem marcar como paga antes).</p>
+      </div>
+
       <div class="error-msg" id="fin-error"></div>
       <div class="modal-actions">
         <button class="btn secondary" id="cancel-fin">Cancelar</button>
         <button class="btn" id="confirm-fin">Salvar</button>
       </div>
     `);
+    const typeSelect = document.getElementById('fin-type');
+    const parceladoField = document.getElementById('fin-parcelado-field');
+    const parceladoCheck = document.getElementById('fin-is-parcelado');
+    const simplesFields = document.getElementById('fin-simples-fields');
+    const parceladoFields = document.getElementById('fin-parcelado-fields');
+    function syncFinFieldsVisibility() {
+      const isDespesa = typeSelect.value === 'despesa';
+      parceladoField.classList.toggle('hidden', !isDespesa);
+      const isParcelado = isDespesa && parceladoCheck.checked;
+      simplesFields.classList.toggle('hidden', isParcelado);
+      parceladoFields.classList.toggle('hidden', !isParcelado);
+    }
+    typeSelect.addEventListener('change', () => {
+      if (typeSelect.value !== 'despesa') parceladoCheck.checked = false;
+      syncFinFieldsVisibility();
+    });
+    parceladoCheck.addEventListener('change', syncFinFieldsVisibility);
+
     document.getElementById('cancel-fin').addEventListener('click', closeModal);
     document.getElementById('confirm-fin').addEventListener('click', async () => {
+      const isParcelado = typeSelect.value === 'despesa' && parceladoCheck.checked;
       try {
-        await api('/api/financeiro', {
-          method: 'POST',
-          body: {
-            date: document.getElementById('fin-date').value,
-            type: document.getElementById('fin-type').value,
-            description: document.getElementById('fin-desc').value,
-            amount: document.getElementById('fin-amount').value
-          }
-        });
+        if (isParcelado) {
+          await api('/api/financeiro/parcelado', {
+            method: 'POST',
+            body: {
+              description: document.getElementById('fin-parc-desc').value,
+              totalAmount: document.getElementById('fin-parc-total').value,
+              numParcelas: document.getElementById('fin-parc-num').value,
+              firstDueDate: document.getElementById('fin-parc-primeira').value
+            }
+          });
+        } else {
+          await api('/api/financeiro', {
+            method: 'POST',
+            body: {
+              date: document.getElementById('fin-date').value,
+              type: typeSelect.value,
+              description: document.getElementById('fin-desc').value,
+              amount: document.getElementById('fin-amount').value
+            }
+          });
+        }
         closeModal();
         loadFinanceiro();
       } catch (err) {

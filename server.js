@@ -120,6 +120,9 @@ CREATE TABLE IF NOT EXISTS messages (
   deleted_by INTEGER REFERENCES users(id),
   reply_to_message_id INTEGER REFERENCES messages(id),
   poll_id INTEGER,
+  edited_at TEXT,
+  pinned_at TEXT,
+  pinned_by INTEGER REFERENCES users(id),
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -164,6 +167,13 @@ CREATE TABLE IF NOT EXISTS cardapio (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- As colunas parcela_* e quitado_em (adicionadas depois, via migracao logo
+-- abaixo para bancos que ja existiam) suportam despesas parceladas (compra no
+-- crediario): cada parcela e uma linha propria, e so conta nos totais/relatorio
+-- depois que "quitado_em" e preenchido (automaticamente quando a data da
+-- parcela chega, ou manualmente se alguem da direcao/secretaria marcar como
+-- paga antes). Lancamentos normais (parcela_total NULL) sempre contaram
+-- direto, sem essa espera - isso nao muda.
 CREATE TABLE IF NOT EXISTS financeiro (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   date TEXT NOT NULL,
@@ -294,6 +304,37 @@ CREATE TABLE IF NOT EXISTS message_reactions (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (message_id, user_id)
 );
+
+-- Enquetes "avulsas" (fora do chat da turma) - mesma logica dos recados:
+-- aparecem em tela cheia assim que a pessoa abre o app e so somem depois que
+-- ela vota (o voto conta como a "ciencia"). audience_type = 'all' (todo
+-- mundo) ou 'turma' (so quem esta naquela turma).
+CREATE TABLE IF NOT EXISTS enquetes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  question TEXT NOT NULL,
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  audience_type TEXT NOT NULL DEFAULT 'all' CHECK(audience_type IN ('all','turma')),
+  turma_id INTEGER REFERENCES turmas(id),
+  canceled_at TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS enquete_options (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  enquete_id INTEGER NOT NULL REFERENCES enquetes(id),
+  option_text TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0
+);
+
+-- Uma linha por pessoa por enquete - votar conta como "dar ciencia" (nao da
+-- pra trocar o voto depois, igual nao da pra "descionfirmar" um recado).
+CREATE TABLE IF NOT EXISTS enquete_votes (
+  enquete_id INTEGER NOT NULL REFERENCES enquetes(id),
+  option_id INTEGER NOT NULL REFERENCES enquete_options(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  voted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (enquete_id, user_id)
+);
 `);
 
 // Migracao segura para bancos que ja existiam antes da coluna "active" existir:
@@ -311,10 +352,32 @@ if (!messageColumns.includes('reply_to_message_id')) {
 if (!messageColumns.includes('poll_id')) {
   db.exec('ALTER TABLE messages ADD COLUMN poll_id INTEGER');
 }
+if (!messageColumns.includes('edited_at')) {
+  db.exec('ALTER TABLE messages ADD COLUMN edited_at TEXT');
+}
+if (!messageColumns.includes('pinned_at')) {
+  db.exec('ALTER TABLE messages ADD COLUMN pinned_at TEXT');
+}
+if (!messageColumns.includes('pinned_by')) {
+  db.exec('ALTER TABLE messages ADD COLUMN pinned_by INTEGER');
+}
 const announcementColumns = db.prepare('PRAGMA table_info(announcements)').all().map(c => c.name);
 ['attachment_filename', 'attachment_original_name', 'attachment_mime', 'attachment_kind'].forEach((col) => {
   if (!announcementColumns.includes(col)) {
     db.exec(`ALTER TABLE announcements ADD COLUMN ${col} TEXT`);
+  }
+});
+// Colunas de despesa parcelada (crediario) na tabela financeiro - bancos
+// antigos nao tem essas colunas ainda.
+const financeiroColumns = db.prepare('PRAGMA table_info(financeiro)').all().map(c => c.name);
+[
+  ['parcela_total', 'INTEGER'],
+  ['parcela_numero', 'INTEGER'],
+  ['parcela_grupo', 'TEXT'],
+  ['quitado_em', 'TEXT']
+].forEach(([col, type]) => {
+  if (!financeiroColumns.includes(col)) {
+    db.exec(`ALTER TABLE financeiro ADD COLUMN ${col} ${type}`);
   }
 });
 
@@ -464,8 +527,11 @@ const MODERACAO_TURMA_ROLES = ['professora_regente', ...DIRECAO_ROLES];
 const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica'];
 // Quem pode encaminhar um recado da turma para o chat de outras turmas
 const FORWARD_TARGET_ROLES = ['professora_regente', 'secretaria', 'coordenadora_pedagogica', 'diretora', 'gestor'];
-// Quem pode criar enquete dentro de uma turma (nunca responsavel, nunca cozinha)
-const POLL_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', ...DIRECAO_ROLES];
+// Quem pode editar a propria mensagem enviada no chat da turma, e quem pode
+// criar uma enquete (nunca responsavel, nunca cozinha) - o mesmo grupo serve
+// pras duas coisas.
+const EDIT_MENSAGEM_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', ...DIRECAO_ROLES];
+const ENQUETE_CREATE_ROLES = EDIT_MENSAGEM_ROLES;
 
 // Monta a "citacao" de uma mensagem original quando outra mensagem responde
 // ela (nome de quem enviou + um resuminho do conteudo).
@@ -564,6 +630,64 @@ function getAnnouncementAcksPayload(announcement) {
   return {
     total: people.length,
     ackedCount: people.filter(p => p.acked).length,
+    people
+  };
+}
+
+// Quem precisa votar numa enquete avulsa: mesma logica de audiencia dos
+// recados (todo mundo ativo, ou so a turma escolhida), sempre menos quem criou.
+function getEnqueteAudienceUserIds(enquete) {
+  let rows;
+  if (enquete.audience_type === 'turma' && enquete.turma_id) {
+    rows = db.prepare('SELECT user_id as id FROM turma_members WHERE turma_id = ?').all(enquete.turma_id);
+  } else {
+    rows = db.prepare('SELECT id FROM users WHERE active = 1').all();
+  }
+  return rows.map(r => r.id).filter(id => id !== enquete.created_by);
+}
+
+// Pergunta + opcoes + contagem de votos de uma enquete avulsa (mesmo formato
+// da enquete de chat antiga, pra reaproveitar o widget de barras no front).
+function getEnquetePayload(enqueteId, forUserId) {
+  const enquete = db.prepare('SELECT * FROM enquetes WHERE id = ?').get(enqueteId);
+  if (!enquete) return null;
+  const options = db.prepare('SELECT * FROM enquete_options WHERE enquete_id = ? ORDER BY position, id').all(enqueteId);
+  const votes = db.prepare(`
+    SELECT v.option_id, v.user_id, u.name as user_name FROM enquete_votes v
+    JOIN users u ON u.id = v.user_id WHERE v.enquete_id = ?
+  `).all(enqueteId);
+  const myVote = votes.find(v => v.user_id === forUserId);
+  return {
+    id: enquete.id,
+    question: enquete.question,
+    options: options.map(o => ({
+      id: o.id,
+      text: o.option_text,
+      count: votes.filter(v => v.option_id === o.id).length,
+      voters: votes.filter(v => v.option_id === o.id).map(v => v.user_name)
+    })),
+    totalVotes: votes.length,
+    myOptionId: myVote ? myVote.option_id : null
+  };
+}
+
+// Lista completa da audiencia de uma enquete com o status de voto de cada
+// pessoa - usado por quem criou a enquete para acompanhar as respostas.
+function getEnqueteVotersPayload(enquete) {
+  const audienceIds = getEnqueteAudienceUserIds(enquete);
+  const votes = db.prepare('SELECT user_id, voted_at FROM enquete_votes WHERE enquete_id = ?').all(enquete.id);
+  const voteMap = new Map(votes.map(v => [v.user_id, v.voted_at]));
+  const people = audienceIds.map((uid) => {
+    const u = db.prepare('SELECT id, name, role FROM users WHERE id = ?').get(uid);
+    if (!u) return null;
+    return {
+      id: u.id, name: u.name, roleLabel: ROLE_LABELS[u.role],
+      voted: voteMap.has(u.id), votedAt: voteMap.get(u.id) || null
+    };
+  }).filter(Boolean).sort((a, b) => (a.voted === b.voted) ? a.name.localeCompare(b.name) : (a.voted ? 1 : -1));
+  return {
+    total: people.length,
+    votedCount: people.filter(p => p.voted).length,
     people
   };
 }
@@ -1150,11 +1274,12 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
   const baseSelect = `
     SELECT msg.*, u.name as user_name, u.role as user_role, u.avatar_filename as user_avatar,
            a.id as att_id, a.kind as att_kind, a.original_name as att_name,
-           du.name as deleted_by_name
+           du.name as deleted_by_name, pu.name as pinned_by_name
     FROM messages msg
     JOIN users u ON u.id = msg.user_id
     LEFT JOIN attachments a ON a.id = msg.attachment_id
     LEFT JOIN users du ON du.id = msg.deleted_by
+    LEFT JOIN users pu ON pu.id = msg.pinned_by
   `;
   let rows;
   if (beforeId) {
@@ -1189,6 +1314,11 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
       deleted: !!r.deleted_at,
       deletedByName: r.deleted_by_name || null,
       canDelete: !r.deleted_at && (r.user_id === req.user.id || MODERACAO_TURMA_ROLES.includes(req.user.role)),
+      editedAt: r.edited_at || null,
+      canEdit: !r.deleted_at && !r.poll_id && r.user_id === req.user.id && EDIT_MENSAGEM_ROLES.includes(req.user.role),
+      pinned: !!r.pinned_at,
+      pinnedByName: r.pinned_by_name || null,
+      canPin: !r.deleted_at && MODERACAO_TURMA_ROLES.includes(req.user.role),
       readBy: readsForTurma
         .filter(mr => mr.user_id !== r.user_id && mr.last_read_message_id >= r.id)
         .map(mr => mr.name),
@@ -1230,6 +1360,16 @@ function createTurmaMessage(turmaId, userId, content, attachmentId, replyToId) {
     deleted: false,
     deletedByName: null,
     canDelete: row.user_id === userId,
+    editedAt: null,
+    // canEdit/canPin dependem de quem esta OLHANDO a mensagem (o dono real da
+    // sessao), nao de quem enviou - como esse payload e o mesmo pra todo
+    // mundo da sala, comecam sempre "false" aqui; o botao aparece certinho
+    // pra quem pode usar ao reabrir a conversa (GET /api/turmas/:id/messages
+    // calcula os dois campos corretamente por pessoa).
+    canEdit: false,
+    pinned: false,
+    pinnedByName: null,
+    canPin: false,
     readBy: [],
     replyTo: getMessageReplyPreview(replyToId),
     poll: null,
@@ -1351,78 +1491,12 @@ app.post('/api/turmas/:id/messages/:msgId/forward', requireAuth, requireTurmaMem
 });
 
 // ---------------------------------------------------------------------------
-// Enquetes dentro da turma
+// Enquetes de chat (legado): a criacao de enquete direto no chat da turma foi
+// removida - agora enquete e feita como "recado" (ver secao propria, mais
+// abaixo). Mantemos so a rota de voto funcionando, para qualquer enquete
+// antiga que ainda esteja aparecendo no chat de alguma turma (ela some
+// sozinha dentro de 5 dias, junto com a mensagem, pela limpeza automatica).
 // ---------------------------------------------------------------------------
-
-// Cria a enquete (pergunta + opcoes) e uma "mensagem" pra ela aparecer no
-// lugar certo do chat, em tempo real pra quem esta na turma agora.
-app.post('/api/turmas/:id/polls', requireAuth, requireTurmaMember, requireRole(...POLL_CREATE_ROLES), (req, res) => {
-  const { question } = req.body;
-  const options = Array.isArray(req.body.options) ? req.body.options.map(o => (o || '').trim()).filter(Boolean) : [];
-  if (!question || !question.trim()) {
-    return res.status(400).json({ error: 'Informe a pergunta da enquete' });
-  }
-  if (options.length < 2) {
-    return res.status(400).json({ error: 'Informe pelo menos 2 opcoes' });
-  }
-  if (options.length > 8) {
-    return res.status(400).json({ error: 'No maximo 8 opcoes' });
-  }
-
-  const pollInfo = db.prepare(
-    'INSERT INTO polls (turma_id, question, created_by) VALUES (?, ?, ?)'
-  ).run(req.turmaId, question.trim(), req.user.id);
-  const pollId = pollInfo.lastInsertRowid;
-
-  const insertOption = db.prepare('INSERT INTO poll_options (poll_id, option_text, position) VALUES (?, ?, ?)');
-  options.forEach((text, idx) => insertOption.run(pollId, text, idx));
-
-  const msgInfo = db.prepare(
-    'INSERT INTO messages (turma_id, user_id, poll_id) VALUES (?, ?, ?)'
-  ).run(req.turmaId, req.user.id, pollId);
-
-  const msgRow = db.prepare(`
-    SELECT msg.*, u.name as user_name, u.role as user_role, u.avatar_filename as user_avatar
-    FROM messages msg JOIN users u ON u.id = msg.user_id WHERE msg.id = ?
-  `).get(msgInfo.lastInsertRowid);
-
-  const payload = {
-    id: msgRow.id,
-    turmaId: req.turmaId,
-    content: null,
-    createdAt: msgRow.created_at,
-    user: {
-      id: msgRow.user_id, name: msgRow.user_name, role: msgRow.user_role, roleLabel: ROLE_LABELS[msgRow.user_role],
-      avatarUrl: msgRow.user_avatar ? `/api/avatar/${msgRow.user_id}` : null
-    },
-    attachment: null,
-    deleted: false,
-    deletedByName: null,
-    canDelete: false,
-    readBy: [],
-    replyTo: null,
-    poll: getPollPayload(pollId, req.user.id)
-  };
-
-  io.to('turma_' + req.turmaId).emit('new_message', payload);
-
-  const memberIds = db.prepare('SELECT user_id FROM turma_members WHERE turma_id = ?').all(req.turmaId).map(r => r.user_id);
-  const viewingNow = getUserIdsInRoom('turma_' + req.turmaId);
-  const notifyIds = memberIds.filter(uid => uid !== req.user.id && !viewingNow.has(uid));
-  const turmaRow = db.prepare('SELECT name FROM turmas WHERE id = ?').get(req.turmaId);
-  sendPushToUsers(notifyIds, {
-    title: turmaRow ? turmaRow.name : 'Nova enquete',
-    body: `${msgRow.user_name} criou uma enquete: ${question.trim()}`,
-    url: `/?openTurma=${req.turmaId}`
-  });
-  notifyIds.forEach((uid) => io.to('user_' + uid).emit('unread_bump', { kind: 'turma', id: req.turmaId }));
-  markTurmaRead(req.turmaId, req.user.id);
-
-  res.json({ message: payload });
-});
-
-// Vota (ou troca o voto) numa enquete. Uma pessoa so tem um voto valendo por
-// vez - votar de novo so substitui a escolha anterior.
 app.post('/api/turmas/:id/polls/:pollId/vote', requireAuth, requireTurmaMember, (req, res) => {
   const poll = db.prepare('SELECT * FROM polls WHERE id = ? AND turma_id = ?').get(req.params.pollId, req.turmaId);
   if (!poll) return res.status(404).json({ error: 'Enquete nao encontrada' });
@@ -1465,6 +1539,68 @@ app.delete('/api/messages/:id', requireAuth, (req, res) => {
     deletedByName: req.user.name
   });
   res.json({ ok: true });
+});
+
+// Edita o texto de uma mensagem ja enviada na turma. So quem enviou pode
+// editar, e so se o papel dela estiver na lista (professora regente, professora
+// auxiliar, estagiaria ou direcao/gestor) - responsavel e cozinha nunca editam.
+// Nao da pra editar mensagem apagada nem enquete.
+app.put('/api/messages/:id', requireAuth, (req, res) => {
+  const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(req.params.id);
+  if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
+  if (!isTurmaMember(msg.turma_id, req.user.id)) {
+    return res.status(403).json({ error: 'Voce nao faz parte desta turma' });
+  }
+  if (msg.deleted_at) return res.status(400).json({ error: 'Esta mensagem foi removida' });
+  if (msg.poll_id) return res.status(400).json({ error: 'Nao e possivel editar uma enquete' });
+  if (msg.user_id !== req.user.id || !EDIT_MENSAGEM_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Sem permissao para editar esta mensagem' });
+  }
+  const content = (req.body.content || '').trim();
+  if (!content && !msg.attachment_id) {
+    return res.status(400).json({ error: 'A mensagem nao pode ficar vazia' });
+  }
+  db.prepare('UPDATE messages SET content = ?, edited_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(content || null, msg.id);
+  const updated = db.prepare('SELECT content, edited_at FROM messages WHERE id = ?').get(msg.id);
+
+  io.to('turma_' + msg.turma_id).emit('message_edited', {
+    id: msg.id,
+    turmaId: msg.turma_id,
+    content: updated.content,
+    editedAt: updated.edited_at
+  });
+  res.json({ ok: true, content: updated.content, editedAt: updated.edited_at });
+});
+
+// Fixa/desfixa uma mensagem da turma (alterna). So professora regente ou
+// direcao/gestor. Mensagem fixada fica isenta da limpeza automatica de 5 dias
+// - so some se quem enviou apagar ela manualmente.
+app.post('/api/messages/:id/pin', requireAuth, (req, res) => {
+  const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(req.params.id);
+  if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
+  if (!isTurmaMember(msg.turma_id, req.user.id)) {
+    return res.status(403).json({ error: 'Voce nao faz parte desta turma' });
+  }
+  if (!MODERACAO_TURMA_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Sem permissao para fixar mensagens' });
+  }
+  if (msg.deleted_at) return res.status(400).json({ error: 'Esta mensagem foi removida' });
+
+  const nowPinned = !msg.pinned_at;
+  if (nowPinned) {
+    db.prepare('UPDATE messages SET pinned_at = CURRENT_TIMESTAMP, pinned_by = ? WHERE id = ?').run(req.user.id, msg.id);
+  } else {
+    db.prepare('UPDATE messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(msg.id);
+  }
+
+  io.to('turma_' + msg.turma_id).emit('message_pin_update', {
+    id: msg.id,
+    turmaId: msg.turma_id,
+    pinned: nowPinned,
+    pinnedByName: nowPinned ? req.user.name : null
+  });
+  res.json({ ok: true, pinned: nowPinned });
 });
 
 // ---------------------------------------------------------------------------
@@ -1981,6 +2117,144 @@ app.delete('/api/recados/:id', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Enquetes avulsas (fora do chat da turma) - mesma logica dos recados: tela
+// cheia obrigatoria ate a pessoa votar, com o criador acompanhando quem ja
+// respondeu.
+// ---------------------------------------------------------------------------
+
+// Cria uma enquete nova e avisa ao vivo quem ja estiver logado (quem nao
+// estiver, ve a enquete pendente assim que abrir o app, via /pending).
+app.post('/api/enquetes', requireAuth, requireRole(...ENQUETE_CREATE_ROLES), (req, res) => {
+  const { question, audienceType, turmaId } = req.body;
+  const options = Array.isArray(req.body.options) ? req.body.options.map(o => (o || '').trim()).filter(Boolean) : [];
+  if (!question || !question.trim()) {
+    return res.status(400).json({ error: 'Informe a pergunta da enquete' });
+  }
+  if (options.length < 2) return res.status(400).json({ error: 'Informe pelo menos 2 opcoes' });
+  if (options.length > 8) return res.status(400).json({ error: 'No maximo 8 opcoes' });
+  if (!['all', 'turma'].includes(audienceType)) {
+    return res.status(400).json({ error: 'Escolha para quem e a enquete' });
+  }
+  let resolvedTurmaId = null;
+  if (audienceType === 'turma') {
+    const turma = db.prepare('SELECT id FROM turmas WHERE id = ?').get(turmaId);
+    if (!turma) return res.status(400).json({ error: 'Turma invalida' });
+    resolvedTurmaId = turma.id;
+  }
+
+  const info = db.prepare(
+    'INSERT INTO enquetes (question, created_by, audience_type, turma_id) VALUES (?, ?, ?, ?)'
+  ).run(question.trim(), req.user.id, audienceType, resolvedTurmaId);
+  const enqueteId = info.lastInsertRowid;
+  const insertOption = db.prepare('INSERT INTO enquete_options (enquete_id, option_text, position) VALUES (?, ?, ?)');
+  options.forEach((text, idx) => insertOption.run(enqueteId, text, idx));
+
+  const enquete = db.prepare('SELECT * FROM enquetes WHERE id = ?').get(enqueteId);
+  const audienceIds = getEnqueteAudienceUserIds(enquete);
+  const payload = {
+    id: enquete.id,
+    question: enquete.question,
+    options: options.map((text, idx) => ({ id: null, text, idx })), // placeholder; front busca via /pending
+    createdByName: req.user.name,
+    createdAt: enquete.created_at
+  };
+  // Manda so o essencial pro socket - quem estiver com o app aberto busca os
+  // dados completos (com os ids reais das opcoes) via /api/enquetes/pending.
+  audienceIds.forEach((uid) => io.to('user_' + uid).emit('new_enquete', { id: enquete.id }));
+
+  res.json({ enquete: { id: enquete.id, question: enquete.question, audienceType, turmaId: resolvedTurmaId, audienceCount: audienceIds.length } });
+});
+
+// Enquetes pendentes (ainda sem voto) do usuario logado, mais antiga primeiro.
+app.get('/api/enquetes/pending', requireAuth, (req, res) => {
+  const candidates = db.prepare(`
+    SELECT * FROM enquetes
+    WHERE canceled_at IS NULL AND created_by != ?
+      AND (audience_type = 'all' OR turma_id IN (SELECT turma_id FROM turma_members WHERE user_id = ?))
+    ORDER BY created_at ASC
+  `).all(req.user.id, req.user.id);
+  const votedIds = new Set(
+    db.prepare('SELECT enquete_id FROM enquete_votes WHERE user_id = ?').all(req.user.id).map(r => r.enquete_id)
+  );
+  const pending = candidates.filter(e => !votedIds.has(e.id)).map((e) => {
+    const author = db.prepare('SELECT name FROM users WHERE id = ?').get(e.created_by);
+    const options = db.prepare('SELECT id, option_text FROM enquete_options WHERE enquete_id = ? ORDER BY position, id').all(e.id);
+    return {
+      id: e.id, question: e.question, options: options.map(o => ({ id: o.id, text: o.option_text })),
+      createdByName: author ? author.name : '', createdAt: e.created_at
+    };
+  });
+  res.json({ pending });
+});
+
+// Vota numa enquete - conta como "dar ciencia": uma vez votado, nao da mais
+// pra trocar (igual nao da pra "desconfirmar" um recado).
+app.post('/api/enquetes/:id/vote', requireAuth, (req, res) => {
+  const enquete = db.prepare('SELECT * FROM enquetes WHERE id = ?').get(req.params.id);
+  if (!enquete) return res.status(404).json({ error: 'Enquete nao encontrada' });
+  if (enquete.canceled_at) return res.status(400).json({ error: 'Esta enquete foi cancelada' });
+  const audienceIds = getEnqueteAudienceUserIds(enquete);
+  if (!audienceIds.includes(req.user.id)) {
+    return res.status(403).json({ error: 'Esta enquete nao e para voce' });
+  }
+  const already = db.prepare('SELECT 1 FROM enquete_votes WHERE enquete_id = ? AND user_id = ?').get(enquete.id, req.user.id);
+  if (already) return res.status(400).json({ error: 'Voce ja votou nesta enquete' });
+  const option = db.prepare('SELECT * FROM enquete_options WHERE id = ? AND enquete_id = ?').get(req.body.optionId, enquete.id);
+  if (!option) return res.status(400).json({ error: 'Opcao invalida' });
+
+  db.prepare('INSERT INTO enquete_votes (enquete_id, option_id, user_id) VALUES (?, ?, ?)').run(enquete.id, option.id, req.user.id);
+  io.to('user_' + enquete.created_by).emit('enquete_vote_update', {
+    enqueteId: enquete.id, userId: req.user.id, userName: req.user.name
+  });
+  res.json({ ok: true });
+});
+
+// Lista de quem ja votou e quem falta - so pra quem criou a enquete ou pra Direcao/Gestor.
+app.get('/api/enquetes/:id/resultados', requireAuth, (req, res) => {
+  const enquete = db.prepare('SELECT * FROM enquetes WHERE id = ?').get(req.params.id);
+  if (!enquete) return res.status(404).json({ error: 'Enquete nao encontrada' });
+  if (enquete.created_by !== req.user.id && !DIRECAO_ROLES.includes(req.user.role) && req.user.role !== 'gestor') {
+    return res.status(403).json({ error: 'Sem permissao para ver os resultados desta enquete' });
+  }
+  res.json({ poll: getEnquetePayload(enquete.id, null), voters: getEnqueteVotersPayload(enquete) });
+});
+
+// Historico de enquetes criadas (tela de gestao) com o resumo de quantas pessoas ja votaram.
+app.get('/api/enquetes', requireAuth, requireRole(...ENQUETE_CREATE_ROLES), (req, res) => {
+  const rows = db.prepare('SELECT * FROM enquetes ORDER BY created_at DESC LIMIT 50').all();
+  const enquetes = rows.map((e) => {
+    const author = db.prepare('SELECT name FROM users WHERE id = ?').get(e.created_by);
+    const voters = getEnqueteVotersPayload(e);
+    let turmaName = null;
+    if (e.turma_id) {
+      const t = db.prepare('SELECT name FROM turmas WHERE id = ?').get(e.turma_id);
+      turmaName = t ? t.name : null;
+    }
+    return {
+      id: e.id, question: e.question, poll: getEnquetePayload(e.id, null),
+      createdByName: author ? author.name : '', createdAt: e.created_at,
+      audienceType: e.audience_type, turmaName, canceled: !!e.canceled_at,
+      votedCount: voters.votedCount, total: voters.total,
+      canCancel: e.created_by === req.user.id || req.user.role === 'gestor'
+    };
+  });
+  res.json({ enquetes });
+});
+
+// Cancela uma enquete (some para quem ainda nao votou; quem ja votou nao muda nada).
+app.delete('/api/enquetes/:id', requireAuth, (req, res) => {
+  const enquete = db.prepare('SELECT * FROM enquetes WHERE id = ?').get(req.params.id);
+  if (!enquete) return res.status(404).json({ error: 'Enquete nao encontrada' });
+  if (enquete.created_by !== req.user.id && req.user.role !== 'gestor') {
+    return res.status(403).json({ error: 'Sem permissao para cancelar esta enquete' });
+  }
+  db.prepare('UPDATE enquetes SET canceled_at = CURRENT_TIMESTAMP WHERE id = ?').run(enquete.id);
+  const audienceIds = getEnqueteAudienceUserIds(enquete);
+  audienceIds.forEach((uid) => io.to('user_' + uid).emit('enquete_canceled', { enqueteId: enquete.id }));
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
 // Cardapio (agenda da cozinha)
 // ---------------------------------------------------------------------------
 app.get('/api/cardapio', requireAuth, (req, res) => {
@@ -2115,16 +2389,34 @@ app.delete('/api/calendario/:id', requireAuth, requireRole(...CALENDARIO_EDIT_RO
 // ---------------------------------------------------------------------------
 // Financeiro (prestacao de contas simples)
 // ---------------------------------------------------------------------------
+
+// Uma parcela de despesa parcelada (parcela_total preenchido) so conta nos
+// totais/relatorio depois de "quitada". Isso acontece sozinho quando a data
+// da parcela chega (essa funcao roda antes de qualquer consulta), ou antes
+// disso se alguem da direcao/secretaria marcar como paga na mao.
+function autoQuitarParcelasVencidas() {
+  db.prepare(`
+    UPDATE financeiro SET quitado_em = date
+    WHERE parcela_total IS NOT NULL AND quitado_em IS NULL AND date <= date('now')
+  `).run();
+}
+
+// So entra nos totais/lista um lancamento normal (parcela_total nulo) ou uma
+// parcela ja quitada - parcela pendente fica de fora ate ser quitada.
+const FIN_CONTA_SQL = '(f.parcela_total IS NULL OR f.quitado_em IS NOT NULL)';
+
 app.get('/api/financeiro', requireAuth, (req, res) => {
+  autoQuitarParcelasVencidas();
   const month = req.query.month; // formato YYYY-MM, opcional
   const rows = month
     ? db.prepare(`
         SELECT f.*, u.name as author_name FROM financeiro f JOIN users u ON u.id = f.created_by
-        WHERE substr(f.date, 1, 7) = ?
+        WHERE substr(f.date, 1, 7) = ? AND ${FIN_CONTA_SQL}
         ORDER BY f.date DESC, f.id DESC
       `).all(month)
     : db.prepare(`
         SELECT f.*, u.name as author_name FROM financeiro f JOIN users u ON u.id = f.created_by
+        WHERE ${FIN_CONTA_SQL}
         ORDER BY f.date DESC, f.id DESC
       `).all();
   const totals = rows.reduce((acc, r) => {
@@ -2136,17 +2428,33 @@ app.get('/api/financeiro', requireAuth, (req, res) => {
 
 // Resumo por mes (para o relatorio mensal): totais de receita/despesa/saldo de cada mes com lancamento
 app.get('/api/financeiro/resumo-mensal', requireAuth, (req, res) => {
+  autoQuitarParcelasVencidas();
   const rows = db.prepare(`
     SELECT substr(date, 1, 7) as month,
       SUM(CASE WHEN type = 'receita' THEN amount ELSE 0 END) as receitas,
       SUM(CASE WHEN type = 'despesa' THEN amount ELSE 0 END) as despesas
-    FROM financeiro
+    FROM financeiro f
+    WHERE ${FIN_CONTA_SQL}
     GROUP BY month
     ORDER BY month DESC
   `).all();
   res.json({
     meses: rows.map(r => ({ month: r.month, receitas: r.receitas, despesas: r.despesas, saldo: r.receitas - r.despesas }))
   });
+});
+
+// Parcelas de despesa parcelada que ainda nao foram quitadas (nao contam nos
+// totais ainda) - lista de "a vencer", visivel pra qualquer pessoa logada
+// (mesma transparencia total do resto do financeiro), com botao de quitar
+// antecipado/excluir so pra quem pode lancar/excluir financeiro.
+app.get('/api/financeiro/parcelas-pendentes', requireAuth, (req, res) => {
+  autoQuitarParcelasVencidas();
+  const rows = db.prepare(`
+    SELECT f.*, u.name as author_name FROM financeiro f JOIN users u ON u.id = f.created_by
+    WHERE f.parcela_total IS NOT NULL AND f.quitado_em IS NULL
+    ORDER BY f.date ASC, f.id ASC
+  `).all();
+  res.json({ pendentes: rows });
 });
 
 app.post('/api/financeiro', requireAuth, requireRole(...FIN_MANAGE_ROLES), (req, res) => {
@@ -2163,6 +2471,74 @@ app.post('/api/financeiro', requireAuth, requireRole(...FIN_MANAGE_ROLES), (req,
     SELECT f.*, u.name as author_name FROM financeiro f JOIN users u ON u.id = f.created_by WHERE f.id = ?
   `).get(info.lastInsertRowid);
   res.json({ item: row });
+});
+
+// Cria uma despesa parcelada (compra no crediario): uma linha por parcela,
+// cada uma vencendo um mes depois da anterior a partir da 1a data informada.
+// Cada parcela so aparece nos totais depois de vencer (ou de ser quitada
+// manualmente antes) - ver FIN_CONTA_SQL / autoQuitarParcelasVencidas acima.
+app.post('/api/financeiro/parcelado', requireAuth, requireRole(...FIN_MANAGE_ROLES), (req, res) => {
+  const { description, totalAmount, numParcelas, firstDueDate } = req.body;
+  const total = Number(totalAmount);
+  const n = Number(numParcelas);
+  if (!description || !description.trim()) {
+    return res.status(400).json({ error: 'Informe a descricao da despesa' });
+  }
+  if (isNaN(total) || total <= 0) return res.status(400).json({ error: 'Valor total invalido' });
+  if (!Number.isInteger(n) || n < 2 || n > 48) {
+    return res.status(400).json({ error: 'Numero de parcelas invalido (minimo 2, maximo 48)' });
+  }
+  if (!firstDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(firstDueDate)) {
+    return res.status(400).json({ error: 'Informe a data de vencimento da 1a parcela' });
+  }
+
+  // Divide o valor total em partes iguais (centavos); a ultima parcela
+  // absorve a diferenca de arredondamento, pra somar exatamente o total.
+  const centsTotal = Math.round(total * 100);
+  const centsEach = Math.floor(centsTotal / n);
+  const centsLast = centsTotal - centsEach * (n - 1);
+
+  const [fy, fm, fd] = firstDueDate.split('-').map(Number);
+  const parcelaGrupo = nanoid();
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  const insert = db.prepare(`
+    INSERT INTO financeiro (date, type, description, amount, created_by, parcela_total, parcela_numero, parcela_grupo, quitado_em)
+    VALUES (?, 'despesa', ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const rows = [];
+  const runAll = db.transaction(() => {
+    for (let i = 0; i < n; i++) {
+      // Mes da parcela i (0-based, o Date normaliza sozinho se passar de dezembro).
+      const targetMonthIndex = fm - 1 + i;
+      // Se o mes de destino tiver menos dias que o dia escolhido (ex: dia 31
+      // caindo num mes de 30 dias), usa o ultimo dia daquele mes em vez de
+      // "estourar" pro mes seguinte.
+      const lastDayOfTargetMonth = new Date(Date.UTC(fy, targetMonthIndex + 1, 0)).getUTCDate();
+      const day = Math.min(fd, lastDayOfTargetMonth);
+      const d = new Date(Date.UTC(fy, targetMonthIndex, day));
+      const dueStr = d.toISOString().slice(0, 10);
+      const amount = (i === n - 1 ? centsLast : centsEach) / 100;
+      const quitadoEm = dueStr <= todayStr ? dueStr : null;
+      const info = insert.run(dueStr, `${description.trim()} (parcela ${i + 1}/${n})`, amount, req.user.id, n, i + 1, parcelaGrupo, quitadoEm);
+      rows.push(info.lastInsertRowid);
+    }
+  });
+  runAll();
+
+  res.json({ ok: true, createdIds: rows });
+});
+
+// Marca uma parcela como paga antes do vencimento chegar sozinho.
+app.post('/api/financeiro/:id/quitar', requireAuth, requireRole(...FIN_MANAGE_ROLES), (req, res) => {
+  const item = db.prepare('SELECT * FROM financeiro WHERE id = ?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Lancamento nao encontrado' });
+  if (item.parcela_total === null || item.parcela_total === undefined) {
+    return res.status(400).json({ error: 'Este lancamento nao e uma parcela' });
+  }
+  if (item.quitado_em) return res.status(400).json({ error: 'Esta parcela ja esta quitada' });
+  db.prepare("UPDATE financeiro SET quitado_em = date('now') WHERE id = ?").run(item.id);
+  res.json({ ok: true });
 });
 
 app.delete('/api/financeiro/:id', requireAuth, requireRole(...FIN_DELETE_ROLES), (req, res) => {
@@ -2259,9 +2635,11 @@ const TURMA_MESSAGE_LIFETIME_DAYS = 5;
 
 function purgeOldTurmaMessages() {
   try {
+    // Mensagem fixada (pinned_at preenchido) nunca entra na limpeza automatica,
+    // mesmo depois de 5 dias - so some se quem enviou apagar ela na mao.
     const old = db.prepare(`
       SELECT id, turma_id, attachment_id, poll_id FROM messages
-      WHERE turma_id IS NOT NULL AND created_at < datetime('now', '-${TURMA_MESSAGE_LIFETIME_DAYS} days')
+      WHERE turma_id IS NOT NULL AND pinned_at IS NULL AND created_at < datetime('now', '-${TURMA_MESSAGE_LIFETIME_DAYS} days')
     `).all();
     if (!old.length) return;
 
