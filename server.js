@@ -1522,7 +1522,7 @@ app.post('/api/turmas/:id/polls/:pollId/vote', requireAuth, requireTurmaMember, 
 app.delete('/api/messages/:id', requireAuth, (req, res) => {
   const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(req.params.id);
   if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
-  if (!isTurmaMember(msg.turma_id, req.user.id)) {
+  if (!canAccessTurma(msg.turma_id, req.user)) {
     return res.status(403).json({ error: 'Voce nao faz parte desta turma' });
   }
   const isOwn = msg.user_id === req.user.id;
@@ -1548,7 +1548,7 @@ app.delete('/api/messages/:id', requireAuth, (req, res) => {
 app.put('/api/messages/:id', requireAuth, (req, res) => {
   const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(req.params.id);
   if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
-  if (!isTurmaMember(msg.turma_id, req.user.id)) {
+  if (!canAccessTurma(msg.turma_id, req.user)) {
     return res.status(403).json({ error: 'Voce nao faz parte desta turma' });
   }
   if (msg.deleted_at) return res.status(400).json({ error: 'Esta mensagem foi removida' });
@@ -1579,7 +1579,7 @@ app.put('/api/messages/:id', requireAuth, (req, res) => {
 app.post('/api/messages/:id/pin', requireAuth, (req, res) => {
   const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(req.params.id);
   if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
-  if (!isTurmaMember(msg.turma_id, req.user.id)) {
+  if (!canAccessTurma(msg.turma_id, req.user)) {
     return res.status(403).json({ error: 'Voce nao faz parte desta turma' });
   }
   if (!MODERACAO_TURMA_ROLES.includes(req.user.role)) {
