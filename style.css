@@ -145,6 +145,14 @@ button {
   border-radius: 8px;
   font-size: 14px;
 }
+.password-field-wrap { position: relative; }
+.password-field-wrap input { padding-right: 42px; }
+.toggle-password-btn {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; font-size: 16px; line-height: 1;
+  padding: 6px 8px; cursor: pointer; color: var(--gray-light);
+}
+.toggle-password-btn:hover { color: var(--gray); }
 .error-msg { color: var(--red); font-size: 13px; margin: 6px 0; min-height: 16px; }
 .hint { color: var(--gray-light); font-size: 12px; margin-top: 10px; }
 

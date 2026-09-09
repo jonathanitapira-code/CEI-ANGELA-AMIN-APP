@@ -108,6 +108,23 @@
     document.getElementById('modal-root').innerHTML = '';
   }
 
+  // ------------------------------------------------------------------
+  // Botao de "mostrar/ocultar senha" (olhinho) em qualquer campo de senha,
+  // inclusive os criados dentro de modais (delegacao de evento no
+  // document, assim funciona sem precisar religar o clique toda vez que
+  // um modal novo com campo de senha e aberto).
+  // ------------------------------------------------------------------
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.toggle-password-btn');
+    if (!btn) return;
+    const input = document.getElementById(btn.dataset.toggleFor);
+    if (!input) return;
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    btn.textContent = showing ? '👁️' : '🙈';
+    btn.title = showing ? 'Mostrar senha' : 'Ocultar senha';
+  });
+
   function openViewer(innerHtml) {
     closeViewer();
     const v = el(`<div class="viewer-backdrop">
@@ -2215,8 +2232,18 @@
         Definindo uma nova senha para <b>${escapeHtml(user.name)}</b> (${roleBadge(user.role, user.roleLabel)}).
         Depois de salvar, avise essa senha diretamente para a pessoa.
       </p>
-      <div class="field"><label>Nova senha</label><input type="password" id="reset-pw" minlength="6" placeholder="Minimo 6 caracteres" /></div>
-      <div class="field"><label>Confirmar nova senha</label><input type="password" id="reset-pw-confirm" minlength="6" /></div>
+      <div class="field"><label>Nova senha</label>
+        <div class="password-field-wrap">
+          <input type="password" id="reset-pw" minlength="6" placeholder="Minimo 6 caracteres" />
+          <button type="button" class="toggle-password-btn" data-toggle-for="reset-pw" title="Mostrar senha">👁️</button>
+        </div>
+      </div>
+      <div class="field"><label>Confirmar nova senha</label>
+        <div class="password-field-wrap">
+          <input type="password" id="reset-pw-confirm" minlength="6" />
+          <button type="button" class="toggle-password-btn" data-toggle-for="reset-pw-confirm" title="Mostrar senha">👁️</button>
+        </div>
+      </div>
       <div class="error-msg" id="reset-pw-error"></div>
       <div class="modal-actions">
         <button class="btn secondary" id="cancel-reset-pw">Cancelar</button>

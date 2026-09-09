@@ -40,7 +40,10 @@
       </div>
       <div class="field">
         <label>Senha</label>
-        <input type="password" id="login-password" required autocomplete="current-password" />
+        <div class="password-field-wrap">
+          <input type="password" id="login-password" required autocomplete="current-password" />
+          <button type="button" class="toggle-password-btn" data-toggle-for="login-password" title="Mostrar senha">👁️</button>
+        </div>
       </div>
       <div class="error-msg" id="login-error"></div>
       <button type="submit" class="btn" style="width:100%">Entrar</button>
@@ -81,7 +84,10 @@
       </div>
       <div class="field">
         <label>Senha</label>
-        <input type="password" id="reg-password" required minlength="6" autocomplete="new-password" />
+        <div class="password-field-wrap">
+          <input type="password" id="reg-password" required minlength="6" autocomplete="new-password" />
+          <button type="button" class="toggle-password-btn" data-toggle-for="reg-password" title="Mostrar senha">👁️</button>
+        </div>
       </div>
       <div class="field" id="reg-staffcode-field">
         <label>Codigo da equipe (fornecido pela direcao)</label>
