@@ -14,10 +14,16 @@
   const DIRECAO_ROLES = ['diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
   const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica', 'gestor'];
   const FORWARD_TARGET_ROLES = ['professora_regente', 'secretaria', 'coordenadora_pedagogica', 'diretora', 'gestor'];
-  // Quem pode editar a propria mensagem no chat da turma, e quem pode criar
-  // uma enquete (nunca responsavel, nunca cozinha) - mesmo grupo pras duas coisas.
+  // Quem pode editar a propria mensagem no chat da turma (nunca responsavel,
+  // nunca cozinha).
   const EDIT_MENSAGEM_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
-  const ENQUETE_CREATE_ROLES = EDIT_MENSAGEM_ROLES;
+  // Quem pode criar enquete DENTRO do chat da turma (a professora que ja esta
+  // ali dentro, sem escolher turma nenhuma).
+  const POLL_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', 'diretora', 'coordenadora_pedagogica', 'secretaria', 'gestor'];
+  // Quem pode criar a enquete AVULSA (aba "Enquetes", estilo recado, com
+  // escolha de audiencia entre "todo mundo" ou "uma turma especifica") -
+  // restrita a Direcao/Gestor porque exige acesso a lista de todas as turmas.
+  const ENQUETE_CREATE_ROLES = DIRECAO_ROLES;
   const TURMA_MANAGE_ROLES = DIRECAO_ROLES; // criar, editar (renomear) ou excluir turma
   const AUDIT_DM_ROLES = DIRECAO_ROLES; // consultar qualquer conversa privada (auditoria)
   const RECADO_CREATE_ROLES = DIRECAO_ROLES; // criar recado com ciencia obrigatoria
@@ -758,6 +764,7 @@
     document.querySelector('.nav-tabs').classList.add('hidden');
     document.getElementById('chat-turma-name').innerHTML = escapeHtml(turma.name);
     document.getElementById('btn-invite').classList.remove('hidden');
+    document.getElementById('btn-poll').classList.toggle('hidden', !POLL_CREATE_ROLES.includes(state.user.role));
     document.getElementById('btn-members').classList.remove('hidden');
     document.getElementById('chat-input-bar').classList.remove('hidden');
     document.getElementById('audit-note').classList.add('hidden');
@@ -785,6 +792,58 @@
   document.getElementById('btn-invite').addEventListener('click', () => {
     if (state.chat && state.chat.type === 'turma') showInviteModal({ name: state.chat.name, invite_code: state.chat.inviteCode });
   });
+
+  document.getElementById('btn-poll').addEventListener('click', () => {
+    if (state.chat && state.chat.type === 'turma') openPollModal();
+  });
+
+  function openPollModal() {
+    const modal = openModal(`
+      <h3>Nova enquete na turma</h3>
+      <div class="field">
+        <label>Pergunta</label>
+        <input type="text" id="poll-question" maxlength="200" placeholder="Ex: Qual dia da festa?">
+      </div>
+      <div class="field" id="poll-options-wrap">
+        <label>Opcoes</label>
+        <input type="text" class="poll-option-input" maxlength="100" placeholder="Opcao 1">
+        <input type="text" class="poll-option-input" maxlength="100" placeholder="Opcao 2">
+      </div>
+      <button class="btn secondary" id="poll-add-option" type="button">+ Adicionar opcao</button>
+      <p class="error-msg hidden" id="poll-error"></p>
+      <div class="modal-actions">
+        <button class="btn" id="poll-cancel">Cancelar</button>
+        <button class="btn primary" id="poll-submit">Criar enquete</button>
+      </div>
+    `);
+    modal.querySelector('#poll-add-option').addEventListener('click', () => {
+      const wrap = modal.querySelector('#poll-options-wrap');
+      const count = wrap.querySelectorAll('.poll-option-input').length;
+      if (count >= 8) return;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'poll-option-input';
+      input.maxLength = 100;
+      input.placeholder = `Opcao ${count + 1}`;
+      wrap.appendChild(input);
+    });
+    modal.querySelector('#poll-cancel').addEventListener('click', () => closeModal());
+    modal.querySelector('#poll-submit').addEventListener('click', async () => {
+      const question = modal.querySelector('#poll-question').value.trim();
+      const options = Array.from(modal.querySelectorAll('.poll-option-input')).map(i => i.value.trim()).filter(Boolean);
+      const errorEl = modal.querySelector('#poll-error');
+      errorEl.classList.add('hidden');
+      if (!question) { errorEl.textContent = 'Informe a pergunta da enquete'; errorEl.classList.remove('hidden'); return; }
+      if (options.length < 2) { errorEl.textContent = 'Informe pelo menos 2 opcoes'; errorEl.classList.remove('hidden'); return; }
+      try {
+        await api(`/api/turmas/${state.chat.id}/polls`, { method: 'POST', body: { question, options } });
+        closeModal();
+      } catch (err) {
+        errorEl.textContent = err.message || 'Erro ao criar enquete';
+        errorEl.classList.remove('hidden');
+      }
+    });
+  }
 
   async function renderMembersModal() {
     const turmaId = state.chat.id;
@@ -1441,6 +1500,7 @@
     document.getElementById('chat-turma-name').innerHTML =
       `${avatarHtml(conv.other, 'small')} ${escapeHtml(conv.other.name)} ${roleBadge(conv.other.role, conv.other.roleLabel)}`;
     document.getElementById('btn-invite').classList.add('hidden');
+    document.getElementById('btn-poll').classList.add('hidden');
     document.getElementById('btn-members').classList.add('hidden');
     document.getElementById('chat-input-bar').classList.remove('hidden');
     document.getElementById('audit-note').classList.add('hidden');
@@ -1504,6 +1564,7 @@
     document.querySelector('.nav-tabs').classList.add('hidden');
     document.getElementById('chat-turma-name').textContent = `${nameA} ↔ ${nameB}`;
     document.getElementById('btn-invite').classList.add('hidden');
+    document.getElementById('btn-poll').classList.add('hidden');
     document.getElementById('btn-members').classList.add('hidden');
     document.getElementById('chat-input-bar').classList.add('hidden');
     document.getElementById('audit-note').classList.remove('hidden');

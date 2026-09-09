@@ -527,11 +527,16 @@ const MODERACAO_TURMA_ROLES = ['professora_regente', ...DIRECAO_ROLES];
 const CALENDARIO_EDIT_ROLES = ['coordenadora_pedagogica'];
 // Quem pode encaminhar um recado da turma para o chat de outras turmas
 const FORWARD_TARGET_ROLES = ['professora_regente', 'secretaria', 'coordenadora_pedagogica', 'diretora', 'gestor'];
-// Quem pode editar a propria mensagem enviada no chat da turma, e quem pode
-// criar uma enquete (nunca responsavel, nunca cozinha) - o mesmo grupo serve
-// pras duas coisas.
+// Quem pode editar a propria mensagem enviada no chat da turma (nunca
+// responsavel, nunca cozinha).
 const EDIT_MENSAGEM_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', ...DIRECAO_ROLES];
-const ENQUETE_CREATE_ROLES = EDIT_MENSAGEM_ROLES;
+// Quem pode criar enquete DENTRO do chat de uma turma (a professora que ja
+// esta ali dentro, sem precisar escolher turma nenhuma).
+const POLL_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'estagiaria', ...DIRECAO_ROLES];
+// Quem pode criar a enquete AVULSA (aba "Enquetes", estilo recado, escolhendo
+// audiencia entre "todo mundo" ou "uma turma especifica") - restrita a
+// Direcao/Gestor porque exige acesso a lista de todas as turmas da creche.
+const ENQUETE_CREATE_ROLES = DIRECAO_ROLES;
 
 // Monta a "citacao" de uma mensagem original quando outra mensagem responde
 // ela (nome de quem enviou + um resuminho do conteudo).
@@ -1491,12 +1496,88 @@ app.post('/api/turmas/:id/messages/:msgId/forward', requireAuth, requireTurmaMem
 });
 
 // ---------------------------------------------------------------------------
-// Enquetes de chat (legado): a criacao de enquete direto no chat da turma foi
-// removida - agora enquete e feita como "recado" (ver secao propria, mais
-// abaixo). Mantemos so a rota de voto funcionando, para qualquer enquete
-// antiga que ainda esteja aparecendo no chat de alguma turma (ela some
-// sozinha dentro de 5 dias, junto com a mensagem, pela limpeza automatica).
+// Enquetes dentro da turma (voltou a existir a pedido: a enquete "avulsa",
+// tipo recado, ficou so para Direcao/Gestor porque exige escolher a turma
+// numa lista que so a Direcao pode consultar. Aqui, como a enquete nasce
+// dentro do chat de uma turma especifica, nao precisa escolher nada - e
+// direto para quem esta na sala, incluindo professoras).
 // ---------------------------------------------------------------------------
+
+// Cria a enquete (pergunta + opcoes) e uma "mensagem" pra ela aparecer no
+// lugar certo do chat, em tempo real pra quem esta na turma agora.
+app.post('/api/turmas/:id/polls', requireAuth, requireTurmaMember, requireRole(...POLL_CREATE_ROLES), (req, res) => {
+  const { question } = req.body;
+  const options = Array.isArray(req.body.options) ? req.body.options.map(o => (o || '').trim()).filter(Boolean) : [];
+  if (!question || !question.trim()) {
+    return res.status(400).json({ error: 'Informe a pergunta da enquete' });
+  }
+  if (options.length < 2) {
+    return res.status(400).json({ error: 'Informe pelo menos 2 opcoes' });
+  }
+  if (options.length > 8) {
+    return res.status(400).json({ error: 'No maximo 8 opcoes' });
+  }
+
+  const pollInfo = db.prepare(
+    'INSERT INTO polls (turma_id, question, created_by) VALUES (?, ?, ?)'
+  ).run(req.turmaId, question.trim(), req.user.id);
+  const pollId = pollInfo.lastInsertRowid;
+
+  const insertOption = db.prepare('INSERT INTO poll_options (poll_id, option_text, position) VALUES (?, ?, ?)');
+  options.forEach((text, idx) => insertOption.run(pollId, text, idx));
+
+  const msgInfo = db.prepare(
+    'INSERT INTO messages (turma_id, user_id, poll_id) VALUES (?, ?, ?)'
+  ).run(req.turmaId, req.user.id, pollId);
+
+  const msgRow = db.prepare(`
+    SELECT msg.*, u.name as user_name, u.role as user_role, u.avatar_filename as user_avatar
+    FROM messages msg JOIN users u ON u.id = msg.user_id WHERE msg.id = ?
+  `).get(msgInfo.lastInsertRowid);
+
+  const payload = {
+    id: msgRow.id,
+    turmaId: req.turmaId,
+    content: null,
+    createdAt: msgRow.created_at,
+    user: {
+      id: msgRow.user_id, name: msgRow.user_name, role: msgRow.user_role, roleLabel: ROLE_LABELS[msgRow.user_role],
+      avatarUrl: msgRow.user_avatar ? `/api/avatar/${msgRow.user_id}` : null
+    },
+    attachment: null,
+    deleted: false,
+    deletedByName: null,
+    canDelete: false,
+    editedAt: null,
+    canEdit: false,
+    pinned: false,
+    pinnedByName: null,
+    canPin: false,
+    readBy: [],
+    replyTo: null,
+    poll: getPollPayload(pollId, req.user.id)
+  };
+
+  io.to('turma_' + req.turmaId).emit('new_message', payload);
+
+  const memberIds = db.prepare('SELECT user_id FROM turma_members WHERE turma_id = ?').all(req.turmaId).map(r => r.user_id);
+  const viewingNow = getUserIdsInRoom('turma_' + req.turmaId);
+  const notifyIds = memberIds.filter(uid => uid !== req.user.id && !viewingNow.has(uid));
+  const turmaRow = db.prepare('SELECT name FROM turmas WHERE id = ?').get(req.turmaId);
+  sendPushToUsers(notifyIds, {
+    title: turmaRow ? turmaRow.name : 'Nova enquete',
+    body: `${msgRow.user_name} criou uma enquete: ${question.trim()}`,
+    url: `/?openTurma=${req.turmaId}`
+  });
+  notifyIds.forEach((uid) => io.to('user_' + uid).emit('unread_bump', { kind: 'turma', id: req.turmaId }));
+  markTurmaRead(req.turmaId, req.user.id);
+
+  res.json({ message: payload });
+});
+
+// Vota (ou troca o voto) numa enquete de turma. Uma pessoa so tem um voto
+// valendo por vez - votar de novo so substitui a escolha anterior (diferente
+// da enquete avulsa, que e voto unico e nao pode trocar).
 app.post('/api/turmas/:id/polls/:pollId/vote', requireAuth, requireTurmaMember, (req, res) => {
   const poll = db.prepare('SELECT * FROM polls WHERE id = ? AND turma_id = ?').get(req.params.pollId, req.turmaId);
   if (!poll) return res.status(404).json({ error: 'Enquete nao encontrada' });
