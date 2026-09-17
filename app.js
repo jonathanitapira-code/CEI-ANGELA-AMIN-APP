@@ -27,8 +27,11 @@
   const TURMA_MANAGE_ROLES = DIRECAO_ROLES; // criar, editar (renomear) ou excluir turma
   const AUDIT_DM_ROLES = DIRECAO_ROLES; // consultar qualquer conversa privada (auditoria)
   const RECADO_CREATE_ROLES = DIRECAO_ROLES; // criar recado com ciencia obrigatoria
+  // Quem pode confirmar/rejeitar/cancelar reserva da sala da Colonia Z-13
+  // (a solicitacao em si e publica, na tela de login, sem precisar de conta).
+  const SALA_RESERVA_ROLES = DIRECAO_ROLES;
 
-  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios', 'auditoria', 'recados', 'enquetes'];
+  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios', 'auditoria', 'recados', 'enquetes', 'sala-reservas'];
 
   const state = {
     user: null,
@@ -215,6 +218,166 @@
     document.getElementById('close-forgot-pw').addEventListener('click', closeModal);
   });
 
+  // ------------------------------------------------------------------
+  // Reserva da sala - Colonia de Pescadores Z-13 (tela publica, sem login)
+  // ------------------------------------------------------------------
+  const salaPublicaScreen = document.getElementById('sala-publica-screen');
+  document.getElementById('btn-colonia-z13').addEventListener('click', () => {
+    authScreen.classList.add('hidden');
+    salaPublicaScreen.classList.remove('hidden');
+    loadSalaReservasPublicas();
+  });
+  document.getElementById('btn-sala-publica-voltar').addEventListener('click', () => {
+    salaPublicaScreen.classList.add('hidden');
+    authScreen.classList.remove('hidden');
+  });
+  document.getElementById('btn-sala-publica-solicitar').addEventListener('click', openSalaReservaSolicitarModal);
+
+  function salaReservaTipoLabel(tipo) { return tipo === 'aluguel' ? 'Aluguel' : 'Empréstimo'; }
+
+  function salaReservaPeriodoLabel(r) {
+    const data = r.startDate === r.endDate
+      ? fmtDateBRShort(r.startDate)
+      : `${fmtDateBRShort(r.startDate)} a ${fmtDateBRShort(r.endDate)}`;
+    return `${data}, ${r.startTime} às ${r.endTime}`;
+  }
+
+  function fmtDateBRShort(iso) {
+    const [y, m, d] = iso.split('-');
+    return `${d}/${m}/${y}`;
+  }
+
+  function mesLabelFromDateStr(iso) {
+    const [y, m] = iso.split('-').map(Number);
+    const nomes = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+    return `${nomes[m - 1]} de ${y}`;
+  }
+
+  // Agrupa uma lista de reservas por "AAAA-MM" do start_date, mantendo a
+  // ordem cronologica dos grupos e das reservas dentro de cada grupo.
+  function agruparSalaReservasPorMes(reservas) {
+    const grupos = new Map();
+    reservas.forEach((r) => {
+      const key = r.startDate.slice(0, 7);
+      if (!grupos.has(key)) grupos.set(key, []);
+      grupos.get(key).push(r);
+    });
+    return [...grupos.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }
+
+  async function loadSalaReservasPublicas() {
+    const list = document.getElementById('sala-publica-list');
+    list.innerHTML = '<div class="empty-state">Carregando...</div>';
+    try {
+      const data = await api('/api/sala-reservas/public');
+      if (!data.reservas.length) {
+        list.innerHTML = '<div class="empty-state">Nenhuma reserva confirmada por enquanto.</div>';
+        return;
+      }
+      const grupos = agruparSalaReservasPorMes(data.reservas);
+      list.innerHTML = '';
+      grupos.forEach(([mesKey, reservas]) => {
+        const bloco = el(`<div class="sala-reserva-mes-bloco">
+          <h4>${mesLabelFromDateStr(mesKey + '-01')}</h4>
+          <div class="sala-reserva-rows"></div>
+        </div>`);
+        const rowsWrap = bloco.querySelector('.sala-reserva-rows');
+        reservas.forEach((r) => {
+          rowsWrap.appendChild(el(`
+            <div class="sala-reserva-row">
+              <div>
+                <b>${escapeHtml(r.entityName)}</b>
+                <span class="sala-reserva-tipo-badge tipo-${r.tipo}">${salaReservaTipoLabel(r.tipo)}</span>
+              </div>
+              <div class="sala-reserva-periodo">${salaReservaPeriodoLabel(r)}</div>
+            </div>
+          `));
+        });
+        list.appendChild(bloco);
+      });
+    } catch (err) {
+      list.innerHTML = `<div class="empty-state">Erro ao carregar: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function openSalaReservaSolicitarModal() {
+    const modal = openModal(`
+      <h3>Solicitar reserva da sala</h3>
+      <p style="font-size:13px;color:#666;margin:-4px 0 12px">
+        O pedido so fica confirmado depois que alguem da Direcao da creche autorizar. Voce pode conferir mais tarde nesta mesma tela se ja foi confirmado.
+      </p>
+      <div class="field"><label>Seu nome</label><input type="text" id="sala-req-nome" maxlength="150" /></div>
+      <div class="field"><label>Telefone para contato (opcional)</label><input type="tel" id="sala-req-telefone" placeholder="(11) 91234-5678" /></div>
+      <div class="field"><label>Para qual entidade/grupo é a reserva</label><input type="text" id="sala-req-entidade" maxlength="150" placeholder="Ex: Colônia de Pescadores Z-13, AABB, etc." /></div>
+      <div class="field">
+        <label>É empréstimo ou aluguel?</label>
+        <select id="sala-req-tipo">
+          <option value="emprestimo">Empréstimo (sem custo)</option>
+          <option value="aluguel">Aluguel</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Data início</label><input type="date" id="sala-req-data-inicio" /></div>
+        <div class="field"><label>Data fim</label><input type="date" id="sala-req-data-fim" /></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Horário início</label><input type="time" id="sala-req-hora-inicio" /></div>
+        <div class="field"><label>Horário fim</label><input type="time" id="sala-req-hora-fim" /></div>
+      </div>
+      <div class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row">
+        <input type="checkbox" id="sala-req-repetir" style="width:auto" />
+        <label style="margin:0" for="sala-req-repetir">Repetir semanalmente (ex: todos os sábados)</label>
+      </div>
+      <div class="field hidden" id="sala-req-repetir-ate-field">
+        <label>Repetir até esta data (inclusive)</label>
+        <input type="date" id="sala-req-repetir-ate" />
+      </div>
+      <div class="error-msg" id="sala-req-error"></div>
+      <div class="modal-actions">
+        <button class="btn" id="sala-req-cancelar">Cancelar</button>
+        <button class="btn primary" id="sala-req-enviar">Enviar solicitação</button>
+      </div>
+    `);
+    const hoje = todayStr();
+    modal.querySelector('#sala-req-data-inicio').value = hoje;
+    modal.querySelector('#sala-req-data-fim').value = hoje;
+    modal.querySelector('#sala-req-repetir').addEventListener('change', (e) => {
+      modal.querySelector('#sala-req-repetir-ate-field').classList.toggle('hidden', !e.target.checked);
+    });
+    modal.querySelector('#sala-req-cancelar').addEventListener('click', closeModal);
+    modal.querySelector('#sala-req-enviar').addEventListener('click', async () => {
+      const errorEl = modal.querySelector('#sala-req-error');
+      errorEl.textContent = '';
+      const repetirAtivo = modal.querySelector('#sala-req-repetir').checked;
+      const body = {
+        requesterName: modal.querySelector('#sala-req-nome').value.trim(),
+        requesterPhone: modal.querySelector('#sala-req-telefone').value.trim(),
+        entityName: modal.querySelector('#sala-req-entidade').value.trim(),
+        tipo: modal.querySelector('#sala-req-tipo').value,
+        startDate: modal.querySelector('#sala-req-data-inicio').value,
+        endDate: modal.querySelector('#sala-req-data-fim').value,
+        startTime: modal.querySelector('#sala-req-hora-inicio').value,
+        endTime: modal.querySelector('#sala-req-hora-fim').value,
+        repeat: repetirAtivo ? { enabled: true, until: modal.querySelector('#sala-req-repetir-ate').value } : { enabled: false }
+      };
+      try {
+        const resultado = await api('/api/sala-reservas', { method: 'POST', body });
+        closeModal();
+        openModal(`
+          <h3>Solicitação enviada!</h3>
+          <p style="font-size:14px;color:#444;line-height:1.5">
+            ${resultado.count > 1 ? `Foram enviadas ${resultado.count} datas de uma vez (repetição semanal).` : 'Sua solicitação foi enviada.'}
+            Assim que alguém da Direção da creche autorizar, a reserva aparece na lista de "Datas já reservadas" aqui nesta mesma tela.
+          </p>
+          <div class="modal-actions"><button class="btn" id="sala-req-ok">Entendi</button></div>
+        `);
+        document.getElementById('sala-req-ok').addEventListener('click', () => { closeModal(); loadSalaReservasPublicas(); });
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    });
+  }
+
   formLogin.addEventListener('submit', async (e) => {
     e.preventDefault();
     const errBox = document.getElementById('login-error');
@@ -372,6 +535,7 @@
     document.getElementById('nav-auditoria').classList.toggle('hidden', !AUDIT_DM_ROLES.includes(state.user.role));
     document.getElementById('nav-recados').classList.toggle('hidden', !RECADO_CREATE_ROLES.includes(state.user.role));
     document.getElementById('nav-enquetes').classList.toggle('hidden', !ENQUETE_CREATE_ROLES.includes(state.user.role));
+    document.getElementById('nav-sala-reservas').classList.toggle('hidden', !SALA_RESERVA_ROLES.includes(state.user.role));
 
     connectSocket();
     setupNav();
@@ -397,6 +561,7 @@
     try { params = new URL(urlStr, location.origin).searchParams; } catch (e) { return; }
     const openTurmaId = params.get('openTurma');
     const openConversationId = params.get('openConversation');
+    const openSalaReservas = params.get('openSalaReservas');
     if (openTurmaId) {
       let turma = state.turmas.find(t => String(t.id) === String(openTurmaId));
       if (!turma) { await loadTurmas(); turma = state.turmas.find(t => String(t.id) === String(openTurmaId)); }
@@ -405,6 +570,8 @@
       await loadConversations();
       const conv = state.conversations.find(c => String(c.id) === String(openConversationId));
       if (conv) openConversation(conv);
+    } else if (openSalaReservas && SALA_RESERVA_ROLES.includes(state.user.role)) {
+      showView('sala-reservas');
     }
   }
 
@@ -569,6 +736,13 @@
       state.enqueteQueue = state.enqueteQueue.filter(q => q.id !== enqueteId);
       showNextEnquete();
     });
+    // Chegou um pedido novo de reserva da sala (Colonia Z-13) - atualiza a
+    // tela de gestao se ela estiver aberta agora.
+    state.socket.on('sala_reserva_nova', () => {
+      if (document.getElementById('view-sala-reservas') && !document.getElementById('view-sala-reservas').classList.contains('hidden')) {
+        loadSalaReservasAdmin();
+      }
+    });
     // Uma turma foi renomeada - atualiza o titulo se essa turma estiver aberta agora
     state.socket.on('turma_renamed', (info) => {
       if (state.chat && state.chat.type === 'turma' && state.chat.id === info.turmaId) {
@@ -629,6 +803,7 @@
     if (name === 'auditoria') loadAuditoria();
     if (name === 'recados') loadRecadosScreen();
     if (name === 'enquetes') loadEnquetesScreen();
+    if (name === 'sala-reservas') loadSalaReservasAdmin();
   }
 
   function leaveChatSocketIfNeeded() {
@@ -2779,6 +2954,160 @@
       if (event.data && event.data.type === 'notification-click' && event.data.url && state.user) {
         openDeepLinkFromUrl(event.data.url);
       }
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Sala Colonia Z-13 - tela de gestao (Direcao/Gestor, dentro do app logado)
+  // ------------------------------------------------------------------
+  async function loadSalaReservasAdmin() {
+    let reservas = [];
+    try {
+      const data = await api('/api/sala-reservas');
+      reservas = data.reservas;
+    } catch (err) {
+      document.getElementById('sala-reservas-pendentes-list').innerHTML = `<div class="empty-state">Erro ao carregar: ${escapeHtml(err.message)}</div>`;
+      document.getElementById('sala-reservas-confirmadas-list').innerHTML = '';
+      document.getElementById('sala-reservas-historico-list').innerHTML = '';
+      return;
+    }
+    const pendentes = reservas.filter(r => r.status === 'pendente');
+    const confirmadas = reservas.filter(r => r.status === 'confirmado');
+    const historico = reservas.filter(r => r.status === 'rejeitado' || r.status === 'cancelado');
+    document.getElementById('sala-reservas-pendentes-title').textContent = `Pendentes${pendentes.length ? ' (' + pendentes.length + ')' : ''}`;
+    renderSalaReservasPendentes(pendentes);
+    renderSalaReservasConfirmadas(confirmadas);
+    renderSalaReservasHistorico(historico);
+  }
+
+  function renderSalaReservaPendenteCard(r) {
+    const card = el(`<div class="sala-reserva-row sala-reserva-row-admin">
+      <div>
+        <b>${escapeHtml(r.entityName)}</b>
+        <span class="sala-reserva-tipo-badge tipo-${r.tipo}">${salaReservaTipoLabel(r.tipo)}</span>
+        <div class="sala-reserva-periodo">${salaReservaPeriodoLabel(r)}</div>
+        <div class="sala-reserva-solicitante">Solicitado por ${escapeHtml(r.requesterName)}${r.requesterPhone ? ' · ' + escapeHtml(r.requesterPhone) : ''}</div>
+      </div>
+      <div class="sala-reserva-actions">
+        <button class="btn ghost" style="padding:2px 8px;font-size:11px" data-confirmar="${r.id}">Confirmar</button>
+        <button class="btn ghost" style="padding:2px 8px;font-size:11px" data-rejeitar="${r.id}">Rejeitar</button>
+      </div>
+    </div>`);
+    card.querySelector('[data-confirmar]').addEventListener('click', async () => {
+      try {
+        await api(`/api/sala-reservas/${r.id}/confirmar`, { method: 'POST' });
+        loadSalaReservasAdmin();
+      } catch (err) { alert('Erro ao confirmar: ' + err.message); }
+    });
+    card.querySelector('[data-rejeitar]').addEventListener('click', async () => {
+      if (!confirm('Rejeitar este pedido de reserva?')) return;
+      try {
+        await api(`/api/sala-reservas/${r.id}/rejeitar`, { method: 'POST' });
+        loadSalaReservasAdmin();
+      } catch (err) { alert('Erro ao rejeitar: ' + err.message); }
+    });
+    return card;
+  }
+
+  function renderSalaReservasPendentes(pendentes) {
+    const wrap = document.getElementById('sala-reservas-pendentes-list');
+    wrap.innerHTML = '';
+    if (!pendentes.length) { wrap.innerHTML = '<div class="empty-state">Nenhum pedido pendente.</div>'; return; }
+
+    const grupos = new Map();
+    const individuais = [];
+    pendentes.forEach((r) => {
+      if (r.grupoRecorrencia) {
+        if (!grupos.has(r.grupoRecorrencia)) grupos.set(r.grupoRecorrencia, []);
+        grupos.get(r.grupoRecorrencia).push(r);
+      } else {
+        individuais.push(r);
+      }
+    });
+
+    individuais.forEach((r) => wrap.appendChild(renderSalaReservaPendenteCard(r)));
+
+    grupos.forEach((rows, grupoId) => {
+      const bloco = el(`<div class="sala-reserva-grupo-bloco">
+        <div class="sala-reserva-grupo-header">
+          <span><b>${escapeHtml(rows[0].entityName)}</b> — pedido repetido (${rows.length} data(s))</span>
+          <span>
+            <button class="btn ghost" style="padding:2px 8px;font-size:11px" data-confirmar-grupo="${grupoId}">Confirmar todas</button>
+            <button class="btn ghost" style="padding:2px 8px;font-size:11px" data-rejeitar-grupo="${grupoId}">Rejeitar todas</button>
+          </span>
+        </div>
+      </div>`);
+      rows.forEach((r) => bloco.appendChild(renderSalaReservaPendenteCard(r)));
+      wrap.appendChild(bloco);
+      bloco.querySelector('[data-confirmar-grupo]').addEventListener('click', async () => {
+        if (!confirm(`Confirmar todas as ${rows.length} data(s) deste pedido?`)) return;
+        try {
+          const res = await api(`/api/sala-reservas/grupo/${grupoId}/confirmar`, { method: 'POST' });
+          if (res.conflitos && res.conflitos.length) {
+            alert(`${res.confirmadas} data(s) confirmada(s). Estas datas ja tinham outra reserva confirmada no mesmo horario e continuam pendentes: ${res.conflitos.join(', ')}`);
+          }
+          loadSalaReservasAdmin();
+        } catch (err) { alert('Erro: ' + err.message); }
+      });
+      bloco.querySelector('[data-rejeitar-grupo]').addEventListener('click', async () => {
+        if (!confirm(`Rejeitar todas as ${rows.length} data(s) deste pedido?`)) return;
+        try {
+          await api(`/api/sala-reservas/grupo/${grupoId}/rejeitar`, { method: 'POST' });
+          loadSalaReservasAdmin();
+        } catch (err) { alert('Erro: ' + err.message); }
+      });
+    });
+  }
+
+  function renderSalaReservasConfirmadas(confirmadas) {
+    const wrap = document.getElementById('sala-reservas-confirmadas-list');
+    wrap.innerHTML = '';
+    if (!confirmadas.length) { wrap.innerHTML = '<div class="empty-state">Nenhuma reserva confirmada.</div>'; return; }
+    const grupos = agruparSalaReservasPorMes(confirmadas);
+    grupos.forEach(([mesKey, reservas]) => {
+      const bloco = el(`<div class="sala-reserva-mes-bloco">
+        <h4>${mesLabelFromDateStr(mesKey + '-01')}</h4>
+        <div class="sala-reserva-rows"></div>
+      </div>`);
+      const rowsWrap = bloco.querySelector('.sala-reserva-rows');
+      reservas.forEach((r) => {
+        const row = el(`<div class="sala-reserva-row">
+          <div>
+            <b>${escapeHtml(r.entityName)}</b>
+            <span class="sala-reserva-tipo-badge tipo-${r.tipo}">${salaReservaTipoLabel(r.tipo)}</span>
+            <div class="sala-reserva-periodo">${salaReservaPeriodoLabel(r)}</div>
+            <div class="sala-reserva-solicitante">Solicitado por ${escapeHtml(r.requesterName)}${r.requesterPhone ? ' · ' + escapeHtml(r.requesterPhone) : ''} · confirmado por ${escapeHtml(r.decidedByName || '?')}</div>
+          </div>
+          <div class="sala-reserva-actions"><button class="btn ghost" style="padding:2px 8px;font-size:11px" data-cancelar="${r.id}">Cancelar</button></div>
+        </div>`);
+        row.querySelector('[data-cancelar]').addEventListener('click', async () => {
+          if (!confirm('Cancelar esta reserva ja confirmada? O horario volta a ficar disponivel para outros pedidos.')) return;
+          try {
+            await api(`/api/sala-reservas/${r.id}/cancelar`, { method: 'POST' });
+            loadSalaReservasAdmin();
+          } catch (err) { alert('Erro ao cancelar: ' + err.message); }
+        });
+        rowsWrap.appendChild(row);
+      });
+      wrap.appendChild(bloco);
+    });
+  }
+
+  function renderSalaReservasHistorico(historico) {
+    const wrap = document.getElementById('sala-reservas-historico-list');
+    wrap.innerHTML = '';
+    if (!historico.length) { wrap.innerHTML = '<div class="empty-state">Nada por aqui ainda.</div>'; return; }
+    historico.slice(0, 100).forEach((r) => {
+      const statusLabel = r.status === 'rejeitado' ? 'Rejeitada' : 'Cancelada';
+      wrap.appendChild(el(`<div class="sala-reserva-row sala-reserva-row-historico">
+        <div>
+          <b>${escapeHtml(r.entityName)}</b>
+          <span class="sala-reserva-tipo-badge tipo-${r.tipo}">${salaReservaTipoLabel(r.tipo)}</span>
+          <span class="sala-reserva-status-badge status-${r.status}">${statusLabel}</span>
+          <div class="sala-reserva-periodo">${salaReservaPeriodoLabel(r)}</div>
+          <div class="sala-reserva-solicitante">Solicitado por ${escapeHtml(r.requesterName)}${r.decidedByName ? ' · decisao de ' + escapeHtml(r.decidedByName) : ''}</div>
+        </div>
+      </div>`));
     });
   }
 

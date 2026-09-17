@@ -47,6 +47,24 @@
       </div>
       <div class="error-msg" id="login-error"></div>
       <button type="submit" class="btn" style="width:100%">Entrar</button>
+      <button type="button" id="btn-colonia-z13" class="btn secondary btn-colonia" style="width:100%">
+        <svg class="colonia-badge-icon" viewBox="0 0 40 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M20 2 L36 9 L36 24 C36 36 29 44 20 46 C11 44 4 36 4 24 L4 9 Z" fill="#2f4a63"/>
+          <path d="M20 5 L33 10.5 L33 24 C33 34 27 40.5 20 42.5 C13 40.5 7 34 7 24 L7 10.5 Z" fill="none" stroke="#fff" stroke-width="1" opacity="0.85"/>
+          <g fill="#fff">
+            <path transform="translate(28,24)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+            <path transform="translate(25.66,29.66)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+            <path transform="translate(20,32)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+            <path transform="translate(14.34,29.66)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+            <path transform="translate(12,24)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+            <path transform="translate(14.34,18.34)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+            <path transform="translate(20,16)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+            <path transform="translate(25.66,18.34)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+            <path transform="translate(20,24)" d="M0,-5 L1.18,-1.62 L4.76,-1.55 L1.90,0.62 L2.94,4.05 L0,2 L-2.94,4.05 L-1.90,0.62 L-4.76,-1.55 L-1.18,-1.62 Z"/>
+          </g>
+        </svg>
+        Colônia de Pescadores Z-13
+      </button>
       <button type="button" id="btn-forgot-password" class="link-btn">Esqueceu sua senha?</button>
     </form>
 
@@ -105,6 +123,40 @@
   </div>
 </div>
 
+<!-- ===================== RESERVA DA SALA (Colonia de Pescadores Z-13) - tela publica, sem login ===================== -->
+<div id="sala-publica-screen" class="hidden">
+  <div class="auth-card" style="max-width:560px">
+    <div class="sala-publica-header">
+      <svg class="colonia-badge-icon colonia-badge-icon-lg" viewBox="0 0 40 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M20 2 L36 9 L36 24 C36 36 29 44 20 46 C11 44 4 36 4 24 L4 9 Z" fill="#2f4a63"/>
+        <path d="M20 5 L33 10.5 L33 24 C33 34 27 40.5 20 42.5 C13 40.5 7 34 7 24 L7 10.5 Z" fill="none" stroke="#fff" stroke-width="1" opacity="0.85"/>
+        <g fill="#fff">
+          <path transform="translate(28,24)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(25.66,29.66)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(20,32)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(14.34,29.66)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(12,24)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(14.34,18.34)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(20,16)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(25.66,18.34)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(20,24)" d="M0,-5 L1.18,-1.62 L4.76,-1.55 L1.90,0.62 L2.94,4.05 L0,2 L-2.94,4.05 L-1.90,0.62 L-4.76,-1.55 L-1.18,-1.62 Z"/>
+        </g>
+      </svg>
+      <div>
+        <h2 style="margin:0">Colônia de Pescadores Z-13</h2>
+        <p style="margin:2px 0 0;color:#666;font-size:14px">Reserva da sala de reunião</p>
+      </div>
+    </div>
+
+    <button type="button" class="btn ghost" id="btn-sala-publica-voltar" style="width:100%;margin-bottom:14px">&larr; Voltar para o login</button>
+    <button type="button" class="btn" id="btn-sala-publica-solicitar" style="width:100%;margin-bottom:18px">+ Solicitar reserva da sala</button>
+
+    <h3 style="margin:0 0 8px">Datas já reservadas</h3>
+    <p style="font-size:13px;color:#666;margin:-4px 0 12px">Confira antes de solicitar, para não pedir uma data que já está ocupada. Só aparece aqui depois que a Direção confirma.</p>
+    <div id="sala-publica-list"></div>
+  </div>
+</div>
+
 <!-- ===================== APP PRINCIPAL ===================== -->
 <div id="app-screen" class="hidden">
   <div class="topbar">
@@ -132,6 +184,7 @@
     <button data-view="recados" id="nav-recados" class="hidden">Recados</button>
     <button data-view="enquetes" id="nav-enquetes" class="hidden">Enquetes</button>
     <button data-view="auditoria" id="nav-auditoria" class="hidden">Auditoria</button>
+    <button data-view="sala-reservas" id="nav-sala-reservas" class="hidden">Sala Colônia Z-13</button>
   </div>
 
   <!-- ---------- TURMAS ---------- -->
@@ -265,6 +318,22 @@
     </p>
     <input type="text" id="auditoria-search" class="search-input" placeholder="Buscar por nome..." />
     <div id="auditoria-list"></div>
+  </div>
+
+  <!-- ---------- SALA COLONIA Z-13 (Direcao/Gestor) ---------- -->
+  <div class="view hidden" id="view-sala-reservas">
+    <div class="view-header">
+      <h2>Reserva da sala - Colônia de Pescadores Z-13</h2>
+    </div>
+    <p style="font-size:13px;color:#666;margin:-6px 0 12px">
+      Pedidos feitos pela tela pública de login. Confirme, rejeite ou cancele uma reserva já confirmada.
+    </p>
+    <h3 style="margin:0 0 8px" id="sala-reservas-pendentes-title">Pendentes</h3>
+    <div id="sala-reservas-pendentes-list"></div>
+    <h3 style="margin:20px 0 8px">Confirmadas (por mês)</h3>
+    <div id="sala-reservas-confirmadas-list"></div>
+    <h3 style="margin:20px 0 8px">Histórico (rejeitadas/canceladas)</h3>
+    <div id="sala-reservas-historico-list"></div>
   </div>
 
   <!-- ---------- CHAT (tela cheia) ---------- -->

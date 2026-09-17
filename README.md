@@ -49,6 +49,7 @@ Aplicativo web para a creche se comunicar com as famílias: chat por turma, card
 - **Recados com ciência obrigatória**: na nova aba **"Recados"**, Diretora/Coordenadora Pedagógica/Secretária/Gestor podem escrever um aviso e escolher enviar para **todo mundo** ou só para **uma turma específica**. O recado aparece em tela cheia assim que a pessoa abre o aplicativo (ou na hora, se ela já estiver com o app aberto) e só some depois que ela clica em **"Dar ciência"** — não dá pra usar o app sem confirmar antes. Quem criou o recado acompanha, em tempo real, uma lista de quem já confirmou e quem ainda falta, e pode cancelar o recado a qualquer momento (quem ainda não viu deixa de receber).
 
   📎 **O recado pode ser só texto, só uma imagem/PDF (um banner, cartaz ou comunicado escaneado), ou os dois juntos.** A imagem aparece direto na tela do recado; o PDF vira um botão que abre no visualizador do próprio app (mesma proteção contra download fácil usada no chat).
+- **Reserva da sala de reunião da Colônia de Pescadores Z-13**: na tela de login, embaixo do botão "Entrar", tem um botão **"Colônia de Pescadores Z-13"** que abre uma tela separada, **sem precisar de conta no app** (pensada para qualquer pessoa da Colônia, não só quem já usa o app da creche). Veja a seção "🏛️ Reserva da sala — Colônia de Pescadores Z-13" abaixo para todos os detalhes.
 
 ## 🗑️ Retenção de mensagens (o app fica mais leve sozinho)
 
@@ -59,6 +60,24 @@ Para o aplicativo não crescer sem parar no disco do Render (o que custaria mais
 - Enquetes e respostas ("citações") ligadas a uma mensagem de turma que expirou também são removidas junto, para não deixar nada "solto" ocupando espaço.
 
 ⚠️ **Isso é definitivo para o chat de turma** — depois de 5 dias não tem como recuperar aquela mensagem/foto/PDF, nem eu consigo trazer de volta. Se sua creche precisa guardar esse histórico por mais tempo (ex: para prestação de contas ou registro pedagógico), me avise que ajusto o prazo (ou desligo essa limpeza automática) facilmente no código (`server.js`, constantes `TURMA_MESSAGE_LIFETIME_DAYS` e `DM_MESSAGE_LIFETIME_DAYS`, ambas em 5 dias hoje).
+
+## 🏛️ Reserva da sala — Colônia de Pescadores Z-13
+
+Fica acessível pelo botão **"Colônia de Pescadores Z-13"**, na tela de login, embaixo do botão "Entrar" — abre uma tela separada, **sem precisar entrar com telefone/senha**, porque quem usa a sala de reunião nem sempre é alguém que já tem conta no app da creche (pode ser outro membro da Colônia de Pescadores).
+
+**Quem solicita (tela pública, sem login):**
+- Preenche: seu nome, telefone para contato (opcional), para qual entidade/grupo é a reserva, se é **empréstimo** (sem custo) ou **aluguel**, data de início e fim, horário de início e fim.
+- Pode marcar **"Repetir semanalmente"** e escolher até quando (ex: pedir a sala todos os sábados até o fim do ano) — o app gera um pedido para cada sábado automaticamente, até um limite de 52 datas de uma vez.
+- Depois de enviar, o pedido fica **pendente**, esperando autorização. Na mesma tela, mais abaixo, aparece a lista **"Datas já reservadas"** — só mostra o que já foi confirmado, separado por mês, para a pessoa conferir antes de pedir uma data que já está ocupada.
+- O app já bloqueia de cara qualquer pedido que bata exatamente em cima de uma reserva **já confirmada** na mesma data/horário (retorna um aviso explicando qual reserva já existe ali). Pedidos ainda pendentes de outras pessoas não bloqueiam uns aos outros — quem decide qual fica é a Direção, na hora de confirmar.
+
+**Quem autoriza (dentro do app, logado):** Diretora, Coordenadora Pedagógica, Secretária e Gestor têm uma aba nova, **"Sala Colônia Z-13"**, com três listas:
+- **Pendentes**: cada pedido tem os botões "Confirmar" e "Rejeitar". Pedidos feitos com "Repetir semanalmente" aparecem agrupados, com botões extras "Confirmar todas"/"Rejeitar todas" para decidir a recorrência inteira de uma vez (ou pedido por pedido, se preferir).
+- **Confirmadas (por mês)**: mostra tudo que já foi autorizado, com um botão "Cancelar" (útil se a sala ficar indisponível por algum motivo depois de já confirmada — libera a data de novo).
+- **Histórico**: pedidos rejeitados ou cancelados, para consulta.
+- Assim que chega um pedido novo, quem tiver notificação push ativada recebe um aviso (igual às notificações de mensagem).
+
+⚠️ Como a tela de solicitação é pública (sem login), qualquer pessoa com o link do app pode enviar um pedido — isso é intencional, para não exigir cadastro de quem só usa a sala de vez em quando. A parte de **autorizar** (confirmar/rejeitar/cancelar) continua restrita à Direção/Gestor.
 
 ## 📶 Bandwidth (diferente de espaço em disco)
 
@@ -120,6 +139,10 @@ O jeito de fazer login mudou de e-mail para telefone, e algumas colunas novas fo
 **Sobre a atualização de "bandwidth"**: adiciona uma dependência nova no `package.json` (`sharp`, usada para comprimir fotos) — o Render instala ela sozinho no próximo deploy, não precisa fazer nada manualmente. Não mexe em nenhuma tabela do banco.
 
 **Sobre a atualização de "financeiro só com saldo", "parcelas", "editar mensagem", "enquete como recado" e "fixar mensagem"**: adiciona quatro colunas novas na tabela `financeiro` (`parcela_total`, `parcela_numero`, `parcela_grupo`, `quitado_em`), três colunas novas na tabela `messages` (`edited_at`, `pinned_at`, `pinned_by`) e três tabelas novas (`enquetes`, `enquete_options`, `enquete_votes`) — também **não apaga nem exige recadastro de ninguém**, e nenhum lançamento/mensagem existente muda de comportamento (só passam a contar com os campos novos, vazios). A opção de criar enquete de dentro do chat da turma foi removida; qualquer enquete de chat que já existisse continua funcionando (aparecendo e recebendo voto) até sumir sozinha na limpeza automática de 5 dias.
+
+**Sobre a atualização de "mostrar/ocultar senha" e "enquete dentro da turma de volta"**: essa não muda nenhuma tabela do banco, só ajusta permissões e telas — **não apaga nem exige recadastro de ninguém**.
+
+**Sobre a atualização de "reserva da sala — Colônia de Pescadores Z-13"**: adiciona uma tabela nova (`sala_reservas`) — também **não apaga nem exige recadastro de ninguém**. Não afeta nenhuma outra funcionalidade do app.
 
 ## Como rodar localmente
 
@@ -236,6 +259,9 @@ uploads/
 | Consultar conversas privadas antigas (auditoria) | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Criar recado com ciência obrigatória | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Dar ciência num recado recebido | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Confirmar/rejeitar/cancelar reserva da sala (Colônia Z-13) | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
+
+Solicitar a reserva da sala (Colônia Z-13) não entra na tabela acima porque não exige login nem papel nenhum — é feito pela tela pública, direto no botão da tela de entrada.
 
 Quem sempre pode enviar mensagens no chat: qualquer pessoa que seja membro daquela turma (entrou pelo link de convite ou foi adicionada por quem gerencia a turma).
 

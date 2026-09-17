@@ -335,6 +335,30 @@ CREATE TABLE IF NOT EXISTS enquete_votes (
   voted_at TEXT DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (enquete_id, user_id)
 );
+
+-- Reserva da sala de reuniao da Colonia de Pescadores Z-13 (mantenedora da
+-- creche). Solicitacao e feita por qualquer pessoa (nao precisa ter conta no
+-- app, o formulario fica acessivel direto na tela de login) e so vira
+-- "confirmado" depois que alguem da Direcao/Gestor aprova. "grupo_recorrencia"
+-- agrupa varias datas de uma mesma solicitacao repetida (ex: todos os
+-- sabados) para poder confirmar/rejeitar todas de uma vez.
+CREATE TABLE IF NOT EXISTS sala_reservas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  requester_name TEXT NOT NULL,
+  requester_phone TEXT,
+  entity_name TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  end_date TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  end_time TEXT NOT NULL,
+  tipo TEXT NOT NULL CHECK(tipo IN ('emprestimo','aluguel')),
+  status TEXT NOT NULL DEFAULT 'pendente' CHECK(status IN ('pendente','confirmado','rejeitado','cancelado')),
+  grupo_recorrencia TEXT,
+  decision_note TEXT,
+  decided_by INTEGER REFERENCES users(id),
+  decided_at TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 // Migracao segura para bancos que ja existiam antes da coluna "active" existir:
@@ -537,6 +561,13 @@ const POLL_CREATE_ROLES = ['professora_regente', 'professora_auxiliar', 'estagia
 // audiencia entre "todo mundo" ou "uma turma especifica") - restrita a
 // Direcao/Gestor porque exige acesso a lista de todas as turmas da creche.
 const ENQUETE_CREATE_ROLES = DIRECAO_ROLES;
+// Quem pode confirmar/rejeitar/cancelar uma reserva da sala de reuniao da
+// Colonia de Pescadores Z-13 (a solicitacao em si e publica, sem precisar de
+// conta no app - so a autorizacao final e restrita).
+const SALA_RESERVA_ROLES = DIRECAO_ROLES;
+// Repeticao semanal (ex: "todos os sabados") - limite de datas geradas de
+// uma vez, so pra nao deixar alguem gerar milhares de linhas por engano.
+const SALA_RESERVA_MAX_OCORRENCIAS = 52;
 
 // Monta a "citacao" de uma mensagem original quando outra mensagem responde
 // ela (nome de quem enviou + um resuminho do conteudo).
@@ -2333,6 +2364,213 @@ app.delete('/api/enquetes/:id', requireAuth, (req, res) => {
   const audienceIds = getEnqueteAudienceUserIds(enquete);
   audienceIds.forEach((uid) => io.to('user_' + uid).emit('enquete_canceled', { enqueteId: enquete.id }));
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Reserva da sala de reuniao - Colonia de Pescadores Z-13 (mantenedora)
+// ---------------------------------------------------------------------------
+function validDateStr(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
+function validTimeStr(s) { return typeof s === 'string' && /^\d{2}:\d{2}$/.test(s); }
+function formatDateBR(iso) {
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+// Duas reservas "confirmado" conflitam se a faixa de datas se cruza E a
+// faixa de horario se cruza (excludeId serve pra nao comparar a reserva
+// com ela mesma, no re-check feito na hora de confirmar).
+function encontrarConflitoSalaReserva(startDate, endDate, startTime, endTime, excludeId) {
+  const params = [endDate, startDate, endTime, startTime];
+  let sql = `
+    SELECT * FROM sala_reservas
+    WHERE status = 'confirmado' AND start_date <= ? AND end_date >= ? AND start_time < ? AND end_time > ?
+  `;
+  if (excludeId) { sql += ' AND id != ?'; params.push(excludeId); }
+  sql += ' LIMIT 1';
+  return db.prepare(sql).get(...params) || null;
+}
+
+// Gera uma ocorrencia por semana (mesmo dia da semana do inicio), mantendo a
+// mesma duracao entre start/end, ate a data "repeatUntil" (inclusive) - ex:
+// "todos os sabados" ate o fim do mes. Limitado a SALA_RESERVA_MAX_OCORRENCIAS
+// pra ninguem gerar centenas de linhas por engano.
+function gerarOcorrenciasSemanais(startDate, endDate, repeatUntil) {
+  const diasDuracao = Math.round(
+    (new Date(endDate + 'T00:00:00Z') - new Date(startDate + 'T00:00:00Z')) / 86400000
+  );
+  const ocorrencias = [];
+  let cursor = new Date(startDate + 'T00:00:00Z');
+  const limite = new Date(repeatUntil + 'T00:00:00Z');
+  while (cursor <= limite && ocorrencias.length < SALA_RESERVA_MAX_OCORRENCIAS) {
+    const cursorEnd = new Date(cursor.getTime() + diasDuracao * 86400000);
+    ocorrencias.push({ startDate: cursor.toISOString().slice(0, 10), endDate: cursorEnd.toISOString().slice(0, 10) });
+    cursor = new Date(cursor.getTime() + 7 * 86400000);
+  }
+  return ocorrencias;
+}
+
+function getSalaReservaAdminUserIds() {
+  return db.prepare(
+    `SELECT id FROM users WHERE active = 1 AND role IN (${SALA_RESERVA_ROLES.map(() => '?').join(',')})`
+  ).all(...SALA_RESERVA_ROLES).map(r => r.id);
+}
+
+function salaReservaPayload(r) {
+  return {
+    id: r.id,
+    requesterName: r.requester_name,
+    requesterPhone: r.requester_phone,
+    entityName: r.entity_name,
+    startDate: r.start_date,
+    endDate: r.end_date,
+    startTime: r.start_time,
+    endTime: r.end_time,
+    tipo: r.tipo,
+    status: r.status,
+    grupoRecorrencia: r.grupo_recorrencia,
+    decisionNote: r.decision_note,
+    decidedByName: r.decided_by_name || null,
+    decidedAt: r.decided_at,
+    createdAt: r.created_at
+  };
+}
+
+// Lista publica (sem login) das reservas ja confirmadas - usada na tela que
+// abre pelo botao "Colonia de Pescadores Z-13" na tela de login, pra qualquer
+// pessoa ver quais datas/horarios ja estao ocupados antes de solicitar.
+app.get('/api/sala-reservas/public', (req, res) => {
+  const rows = db.prepare(`
+    SELECT * FROM sala_reservas
+    WHERE status = 'confirmado' AND end_date >= date('now', '-7 days')
+    ORDER BY start_date ASC, start_time ASC
+  `).all();
+  res.json({ reservas: rows.map(salaReservaPayload) });
+});
+
+// Solicitacao de reserva - publica (sem login), pois quem usa a sala nem
+// sempre tem conta no app (pode ser outro membro da Colonia de Pescadores).
+// So vira "confirmado" depois que alguem da Direcao/Gestor aprova.
+app.post('/api/sala-reservas', (req, res) => {
+  const requesterName = (req.body.requesterName || '').trim();
+  const requesterPhone = (req.body.requesterPhone || '').trim();
+  const entityName = (req.body.entityName || '').trim();
+  const { startDate, endDate, startTime, endTime, tipo } = req.body;
+  const repeat = req.body.repeat || {};
+
+  if (!requesterName) return res.status(400).json({ error: 'Informe o nome de quem esta solicitando' });
+  if (requesterName.length > 150) return res.status(400).json({ error: 'Nome muito longo' });
+  if (!entityName) return res.status(400).json({ error: 'Informe para qual entidade e a reserva' });
+  if (entityName.length > 150) return res.status(400).json({ error: 'Nome da entidade muito longo' });
+  if (!['emprestimo', 'aluguel'].includes(tipo)) return res.status(400).json({ error: 'Escolha se e emprestimo ou aluguel' });
+  if (!validDateStr(startDate) || !validDateStr(endDate)) return res.status(400).json({ error: 'Datas invalidas' });
+  if (endDate < startDate) return res.status(400).json({ error: 'A data final nao pode ser antes da data inicial' });
+  if (!validTimeStr(startTime) || !validTimeStr(endTime)) return res.status(400).json({ error: 'Horarios invalidos' });
+  if (endTime <= startTime) return res.status(400).json({ error: 'O horario final deve ser depois do horario inicial' });
+
+  let ocorrencias;
+  if (repeat && repeat.enabled) {
+    if (!validDateStr(repeat.until)) return res.status(400).json({ error: 'Informe ate quando repetir' });
+    if (repeat.until < startDate) return res.status(400).json({ error: 'A data final da repeticao deve ser depois da data inicial' });
+    ocorrencias = gerarOcorrenciasSemanais(startDate, endDate, repeat.until);
+  } else {
+    ocorrencias = [{ startDate, endDate }];
+  }
+  if (!ocorrencias.length) return res.status(400).json({ error: 'Nenhuma data gerada para a repeticao informada' });
+
+  // Confere conflito com reservas ja CONFIRMADAS antes de criar qualquer coisa
+  // (pedidos ainda pendentes de outras pessoas podem se cruzar sem problema -
+  // quem decide qual fica e a Direcao, na hora de confirmar).
+  for (const oc of ocorrencias) {
+    const conflito = encontrarConflitoSalaReserva(oc.startDate, oc.endDate, startTime, endTime, null);
+    if (conflito) {
+      return res.status(409).json({
+        error: `A sala ja esta reservada em ${formatDateBR(oc.startDate)} das ${conflito.start_time} as ${conflito.end_time} (${conflito.entity_name}). Escolha outra data ou horario.`
+      });
+    }
+  }
+
+  const grupo = ocorrencias.length > 1 ? crypto.randomBytes(8).toString('hex') : null;
+  const insert = db.prepare(`
+    INSERT INTO sala_reservas (requester_name, requester_phone, entity_name, start_date, end_date, start_time, end_time, tipo, grupo_recorrencia)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const ids = ocorrencias.map(oc => insert.run(
+    requesterName, requesterPhone || null, entityName, oc.startDate, oc.endDate, startTime, endTime, tipo, grupo
+  ).lastInsertRowid);
+
+  const adminIds = getSalaReservaAdminUserIds();
+  adminIds.forEach((uid) => io.to('user_' + uid).emit('sala_reserva_nova', { count: ids.length }));
+  sendPushToUsers(adminIds, {
+    title: 'Reserva da sala - Colônia Z-13',
+    body: `${requesterName} solicitou a sala para "${entityName}" em ${formatDateBR(ocorrencias[0].startDate)}${ocorrencias.length > 1 ? ` (+${ocorrencias.length - 1} data(s))` : ''} - aguardando autorizacao.`,
+    url: '/?openSalaReservas=1'
+  });
+
+  res.json({ ok: true, count: ids.length });
+});
+
+// A partir daqui, so Direcao/Gestor (autorizacao das reservas).
+app.get('/api/sala-reservas', requireAuth, requireRole(...SALA_RESERVA_ROLES), (req, res) => {
+  const rows = db.prepare(`
+    SELECT r.*, u.name as decided_by_name
+    FROM sala_reservas r
+    LEFT JOIN users u ON u.id = r.decided_by
+    ORDER BY (r.status = 'pendente') DESC, r.start_date ASC, r.start_time ASC
+  `).all();
+  res.json({ reservas: rows.map(salaReservaPayload) });
+});
+
+app.post('/api/sala-reservas/:id/confirmar', requireAuth, requireRole(...SALA_RESERVA_ROLES), (req, res) => {
+  const reserva = db.prepare('SELECT * FROM sala_reservas WHERE id = ?').get(req.params.id);
+  if (!reserva) return res.status(404).json({ error: 'Reserva nao encontrada' });
+  if (reserva.status !== 'pendente') return res.status(400).json({ error: 'Esta reserva ja foi decidida' });
+  const conflito = encontrarConflitoSalaReserva(reserva.start_date, reserva.end_date, reserva.start_time, reserva.end_time, reserva.id);
+  if (conflito) {
+    return res.status(409).json({ error: `Ja existe outra reserva confirmada nesta data/horario (${conflito.entity_name}). Rejeite uma das duas antes de confirmar esta.` });
+  }
+  db.prepare(`UPDATE sala_reservas SET status = 'confirmado', decided_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ?`).run(req.user.id, reserva.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/sala-reservas/:id/rejeitar', requireAuth, requireRole(...SALA_RESERVA_ROLES), (req, res) => {
+  const reserva = db.prepare('SELECT * FROM sala_reservas WHERE id = ?').get(req.params.id);
+  if (!reserva) return res.status(404).json({ error: 'Reserva nao encontrada' });
+  if (reserva.status !== 'pendente') return res.status(400).json({ error: 'Esta reserva ja foi decidida' });
+  const note = (req.body.note || '').trim() || null;
+  db.prepare(`UPDATE sala_reservas SET status = 'rejeitado', decided_by = ?, decided_at = CURRENT_TIMESTAMP, decision_note = ? WHERE id = ?`).run(req.user.id, note, reserva.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/sala-reservas/:id/cancelar', requireAuth, requireRole(...SALA_RESERVA_ROLES), (req, res) => {
+  const reserva = db.prepare('SELECT * FROM sala_reservas WHERE id = ?').get(req.params.id);
+  if (!reserva) return res.status(404).json({ error: 'Reserva nao encontrada' });
+  if (reserva.status !== 'confirmado') return res.status(400).json({ error: 'Somente reservas confirmadas podem ser canceladas' });
+  const note = (req.body.note || '').trim() || null;
+  db.prepare(`UPDATE sala_reservas SET status = 'cancelado', decided_by = ?, decided_at = CURRENT_TIMESTAMP, decision_note = ? WHERE id = ?`).run(req.user.id, note, reserva.id);
+  res.json({ ok: true });
+});
+
+// Acoes em lote pra recorrencia (ex: confirmar todos os sabados de uma vez).
+app.post('/api/sala-reservas/grupo/:grupo/confirmar', requireAuth, requireRole(...SALA_RESERVA_ROLES), (req, res) => {
+  const rows = db.prepare(`SELECT * FROM sala_reservas WHERE grupo_recorrencia = ? AND status = 'pendente'`).all(req.params.grupo);
+  let confirmadas = 0;
+  const conflitos = [];
+  rows.forEach((reserva) => {
+    const conflito = encontrarConflitoSalaReserva(reserva.start_date, reserva.end_date, reserva.start_time, reserva.end_time, reserva.id);
+    if (conflito) { conflitos.push(formatDateBR(reserva.start_date)); return; }
+    db.prepare(`UPDATE sala_reservas SET status = 'confirmado', decided_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ?`).run(req.user.id, reserva.id);
+    confirmadas++;
+  });
+  res.json({ ok: true, confirmadas, conflitos });
+});
+
+app.post('/api/sala-reservas/grupo/:grupo/rejeitar', requireAuth, requireRole(...SALA_RESERVA_ROLES), (req, res) => {
+  const note = (req.body.note || '').trim() || null;
+  const info = db.prepare(`
+    UPDATE sala_reservas SET status = 'rejeitado', decided_by = ?, decided_at = CURRENT_TIMESTAMP, decision_note = ?
+    WHERE grupo_recorrencia = ? AND status = 'pendente'
+  `).run(req.user.id, note, req.params.grupo);
+  res.json({ ok: true, rejeitadas: info.changes });
 });
 
 // ---------------------------------------------------------------------------

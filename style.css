@@ -95,7 +95,7 @@ button {
 .btn:disabled { opacity: .5; cursor: default; }
 
 /* ---------- Auth screen ---------- */
-#auth-screen {
+#auth-screen, #sala-publica-screen {
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -387,11 +387,43 @@ table.fin-table td.amount-receita, table.fin-table td.amount-despesa { font-weig
 .acks-row .ack-yes { color: var(--green); font-weight: 600; }
 .acks-row .ack-no { color: var(--gray-light); }
 
+/* ---------- Reserva da sala - Colonia de Pescadores Z-13 ---------- */
+.btn-colonia { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
+.colonia-badge-icon { width: 22px; height: 26px; flex-shrink: 0; }
+.colonia-badge-icon-lg { width: 44px; height: 52px; }
+.sala-publica-header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sala-reserva-mes-bloco { margin-bottom: 18px; }
+.sala-reserva-mes-bloco h4 { margin: 0 0 8px; font-size: 13px; color: var(--gray-light); text-transform: uppercase; letter-spacing: .03em; }
+.sala-reserva-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+}
+.sala-reserva-periodo { font-size: 13px; color: var(--gray); margin-top: 2px; }
+.sala-reserva-solicitante { font-size: 12px; color: var(--gray-light); margin-top: 2px; }
+.sala-reserva-tipo-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; margin-left: 6px; white-space: nowrap;
+}
+.sala-reserva-tipo-badge.tipo-emprestimo { background: var(--green); }
+.sala-reserva-tipo-badge.tipo-aluguel { background: var(--blue); }
+.sala-reserva-status-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; margin-left: 6px; white-space: nowrap; }
+.sala-reserva-status-badge.status-rejeitado { background: var(--red); }
+.sala-reserva-status-badge.status-cancelado { background: var(--gray-light); }
+.sala-reserva-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.sala-reserva-row-historico { opacity: .7; }
+.sala-reserva-grupo-bloco { border: 1px dashed var(--border); border-radius: 12px; padding: 10px; margin-bottom: 14px; }
+.sala-reserva-grupo-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  font-size: 13px; color: var(--gray); margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+
 form { margin: 0; }
 
 @media (max-width: 640px) {
   .view { padding: 10px; }
   .fin-totals { grid-template-columns: 1fr; }
+  .field-row { grid-template-columns: 1fr; }
+  .sala-reserva-row { flex-direction: column; }
 }
 
 /* ---------- Responder mensagem (reply) ---------- */
