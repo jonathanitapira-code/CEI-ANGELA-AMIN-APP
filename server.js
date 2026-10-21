@@ -385,6 +385,10 @@ if (!messageColumns.includes('pinned_at')) {
 if (!messageColumns.includes('pinned_by')) {
   db.exec('ALTER TABLE messages ADD COLUMN pinned_by INTEGER');
 }
+// Ate quando a mensagem fica fixada (NULL = sem prazo, fixada ate alguem desafixar)
+if (!messageColumns.includes('pinned_until')) {
+  db.exec('ALTER TABLE messages ADD COLUMN pinned_until TEXT');
+}
 const announcementColumns = db.prepare('PRAGMA table_info(announcements)').all().map(c => c.name);
 ['attachment_filename', 'attachment_original_name', 'attachment_mime', 'attachment_kind'].forEach((col) => {
   if (!announcementColumns.includes(col)) {
@@ -1458,8 +1462,9 @@ app.get('/api/turmas/:id/messages', requireAuth, requireTurmaMember, (req, res) 
       canDelete: !r.deleted_at && (r.user_id === req.user.id || MODERACAO_TURMA_ROLES.includes(req.user.role)),
       editedAt: r.edited_at || null,
       canEdit: !r.deleted_at && !r.poll_id && r.user_id === req.user.id && EDIT_MENSAGEM_ROLES.includes(req.user.role),
-      pinned: !!r.pinned_at,
-      pinnedByName: r.pinned_by_name || null,
+      pinned: isPinActive(r),
+      pinnedByName: isPinActive(r) ? (r.pinned_by_name || null) : null,
+      pinnedUntil: isPinActive(r) ? (r.pinned_until || null) : null,
       canPin: !r.deleted_at && MODERACAO_TURMA_ROLES.includes(req.user.role),
       readBy: readsForTurma
         .filter(mr => mr.user_id !== r.user_id && mr.last_read_message_id >= r.id)
@@ -1791,9 +1796,18 @@ app.put('/api/messages/:id', requireAuth, (req, res) => {
   res.json({ ok: true, content: updated.content, editedAt: updated.edited_at });
 });
 
+// Mensagem esta fixada AGORA? (fixada e o prazo escolhido ainda nao acabou;
+// sem prazo = fixada ate alguem desafixar).
+function isPinActive(r) {
+  if (!r.pinned_at) return false;
+  if (!r.pinned_until) return true;
+  return new Date(r.pinned_until.replace(' ', 'T') + 'Z').getTime() > Date.now();
+}
+
 // Fixa/desfixa uma mensagem da turma (alterna). So professora regente ou
-// direcao/gestor. Mensagem fixada fica isenta da limpeza automatica de 5 dias
-// - so some se quem enviou apagar ela manualmente.
+// direcao/gestor. Ao fixar, escolhe-se por quantos dias (body.days, 1 a 365;
+// vazio = sem prazo). Enquanto fixada fica isenta da limpeza automatica de 5
+// dias; passado o prazo volta a regra normal.
 app.post('/api/messages/:id/pin', requireAuth, (req, res) => {
   const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(req.params.id);
   if (!msg) return res.status(404).json({ error: 'Mensagem nao encontrada' });
@@ -1805,20 +1819,32 @@ app.post('/api/messages/:id/pin', requireAuth, (req, res) => {
   }
   if (msg.deleted_at) return res.status(400).json({ error: 'Esta mensagem foi removida' });
 
-  const nowPinned = !msg.pinned_at;
+  const nowPinned = !isPinActive(msg);
+  let pinnedUntil = null;
   if (nowPinned) {
-    db.prepare('UPDATE messages SET pinned_at = CURRENT_TIMESTAMP, pinned_by = ? WHERE id = ?').run(req.user.id, msg.id);
+    const daysRaw = req.body && req.body.days;
+    if (daysRaw !== undefined && daysRaw !== null && daysRaw !== '') {
+      const days = Math.floor(Number(daysRaw));
+      if (!Number.isFinite(days) || days < 1 || days > 365) {
+        return res.status(400).json({ error: 'Escolha de 1 a 365 dias' });
+      }
+      db.prepare(`UPDATE messages SET pinned_at = CURRENT_TIMESTAMP, pinned_by = ?, pinned_until = datetime('now', '+${days} days') WHERE id = ?`).run(req.user.id, msg.id);
+    } else {
+      db.prepare('UPDATE messages SET pinned_at = CURRENT_TIMESTAMP, pinned_by = ?, pinned_until = NULL WHERE id = ?').run(req.user.id, msg.id);
+    }
+    pinnedUntil = db.prepare('SELECT pinned_until FROM messages WHERE id = ?').get(msg.id).pinned_until || null;
   } else {
-    db.prepare('UPDATE messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?').run(msg.id);
+    db.prepare('UPDATE messages SET pinned_at = NULL, pinned_by = NULL, pinned_until = NULL WHERE id = ?').run(msg.id);
   }
 
   io.to('turma_' + msg.turma_id).emit('message_pin_update', {
     id: msg.id,
     turmaId: msg.turma_id,
     pinned: nowPinned,
-    pinnedByName: nowPinned ? req.user.name : null
+    pinnedByName: nowPinned ? req.user.name : null,
+    pinnedUntil
   });
-  res.json({ ok: true, pinned: nowPinned });
+  res.json({ ok: true, pinned: nowPinned, pinnedUntil });
 });
 
 // ---------------------------------------------------------------------------
@@ -2313,26 +2339,43 @@ app.get('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), (req, 
       createdByName: author ? author.name : '', createdAt: a.created_at,
       audienceType: a.audience_type, turmaName, canceled: !!a.canceled_at,
       ackedCount: acks.ackedCount, total: acks.total,
-      canCancel: a.created_by === req.user.id || req.user.role === 'gestor'
+      canCancel: true // quem acessa esta lista e Direcao/Gestor: pode apagar
     };
   });
   res.json({ announcements });
 });
 
-// Cancela um recado (some para quem ainda nao viu; quem ja confirmou nao muda nada).
-// Tambem apaga o arquivo anexado do disco, se tiver, pra nao ficar ocupando espaco a toa.
-app.delete('/api/recados/:id', requireAuth, (req, res) => {
-  const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id);
-  if (!announcement) return res.status(404).json({ error: 'Recado nao encontrado' });
-  if (announcement.created_by !== req.user.id && req.user.role !== 'gestor') {
-    return res.status(403).json({ error: 'Sem permissao para cancelar este recado' });
-  }
-  db.prepare('UPDATE announcements SET canceled_at = CURRENT_TIMESTAMP WHERE id = ?').run(announcement.id);
+// Ids da Direcao/Gestor ativos (pra avisar ao vivo quando algo e apagado e a
+// tela de gestao deles atualizar).
+function getDirecaoUserIds() {
+  return db.prepare(`SELECT id FROM users WHERE active = 1 AND role IN (${DIRECAO_ROLES.map(() => '?').join(',')})`)
+    .all(...DIRECAO_ROLES).map(r => r.id);
+}
+
+// Apaga um recado DE VEZ do banco (com confirmacoes e arquivo anexo) - libera
+// espaco e some para pais e gestao.
+function hardDeleteAnnouncement(announcement) {
+  db.transaction(() => {
+    db.prepare('DELETE FROM announcement_acks WHERE announcement_id = ?').run(announcement.id);
+    db.prepare('DELETE FROM announcement_turmas WHERE announcement_id = ?').run(announcement.id);
+    db.prepare('DELETE FROM announcements WHERE id = ?').run(announcement.id);
+  })();
   if (announcement.attachment_filename) {
     fs.unlink(path.join(UPLOAD_DIR, announcement.attachment_filename), () => {});
   }
-  const audienceIds = getAnnouncementAudienceUserIds(announcement);
-  audienceIds.forEach((uid) => io.to('user_' + uid).emit('recado_canceled', { announcementId: announcement.id }));
+}
+
+// Apaga um recado (criador, Direcao ou Gestor). Some de vez para todo mundo.
+app.delete('/api/recados/:id', requireAuth, (req, res) => {
+  const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id);
+  if (!announcement) return res.status(404).json({ error: 'Recado nao encontrado' });
+  if (announcement.created_by !== req.user.id && !DIRECAO_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Sem permissao para apagar este recado' });
+  }
+  const audienceIds = getAnnouncementAudienceUserIds(announcement); // calcular ANTES de apagar
+  hardDeleteAnnouncement(announcement);
+  const notify = new Set([...audienceIds, announcement.created_by, ...getDirecaoUserIds()]);
+  notify.forEach((uid) => io.to('user_' + uid).emit('recado_canceled', { announcementId: announcement.id }));
   res.json({ ok: true });
 });
 
@@ -2455,24 +2498,42 @@ app.get('/api/enquetes', requireAuth, requireRole(...ENQUETE_CREATE_ROLES), (req
       createdByName: author ? author.name : '', createdAt: e.created_at,
       audienceType: e.audience_type, turmaName, canceled: !!e.canceled_at,
       votedCount: voters.votedCount, total: voters.total,
-      canCancel: e.created_by === req.user.id || req.user.role === 'gestor'
+      canCancel: true
     };
   });
   res.json({ enquetes });
 });
 
-// Cancela uma enquete (some para quem ainda nao votou; quem ja votou nao muda nada).
+// Apaga a enquete DE VEZ (com opcoes e votos) - some para pais e gestao.
+function hardDeleteEnquete(enquete) {
+  db.transaction(() => {
+    db.prepare('DELETE FROM enquete_votes WHERE enquete_id = ?').run(enquete.id);
+    db.prepare('DELETE FROM enquete_options WHERE enquete_id = ?').run(enquete.id);
+    db.prepare('DELETE FROM enquetes WHERE id = ?').run(enquete.id);
+  })();
+}
+
 app.delete('/api/enquetes/:id', requireAuth, (req, res) => {
   const enquete = db.prepare('SELECT * FROM enquetes WHERE id = ?').get(req.params.id);
   if (!enquete) return res.status(404).json({ error: 'Enquete nao encontrada' });
-  if (enquete.created_by !== req.user.id && req.user.role !== 'gestor') {
-    return res.status(403).json({ error: 'Sem permissao para cancelar esta enquete' });
+  if (enquete.created_by !== req.user.id && !DIRECAO_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Sem permissao para apagar esta enquete' });
   }
-  db.prepare('UPDATE enquetes SET canceled_at = CURRENT_TIMESTAMP WHERE id = ?').run(enquete.id);
-  const audienceIds = getEnqueteAudienceUserIds(enquete);
-  audienceIds.forEach((uid) => io.to('user_' + uid).emit('enquete_canceled', { enqueteId: enquete.id }));
+  const audienceIds = getEnqueteAudienceUserIds(enquete); // calcular ANTES de apagar
+  hardDeleteEnquete(enquete);
+  const notify = new Set([...audienceIds, enquete.created_by, ...getDirecaoUserIds()]);
+  notify.forEach((uid) => io.to('user_' + uid).emit('enquete_canceled', { enqueteId: enquete.id }));
   res.json({ ok: true });
 });
+
+// Limpeza unica: recados/enquetes "cancelados" na versao antiga (so marcados)
+// agora sao apagados de verdade, pra nao ocupar espaco no banco.
+setTimeout(() => {
+  try {
+    db.prepare('SELECT * FROM announcements WHERE canceled_at IS NOT NULL').all().forEach(hardDeleteAnnouncement);
+    db.prepare('SELECT * FROM enquetes WHERE canceled_at IS NOT NULL').all().forEach(hardDeleteEnquete);
+  } catch (err) { console.error('Erro limpando recados/enquetes cancelados:', err); }
+}, 5000);
 
 // ---------------------------------------------------------------------------
 // Reserva da sala de reuniao - Colonia de Pescadores Z-13 (mantenedora)
@@ -3128,8 +3189,20 @@ const TURMA_MESSAGE_LIFETIME_DAYS = 5;
 
 function purgeOldTurmaMessages() {
   try {
-    // Mensagem fixada (pinned_at preenchido) nunca entra na limpeza automatica,
-    // mesmo depois de 5 dias - so some se quem enviou apagar ela na mao.
+    // Fixacoes com prazo vencido voltam ao normal (desafixa e avisa a turma).
+    const expired = db.prepare(`
+      SELECT id, turma_id FROM messages
+      WHERE pinned_at IS NOT NULL AND pinned_until IS NOT NULL AND pinned_until <= datetime('now')
+    `).all();
+    if (expired.length) {
+      db.prepare(`UPDATE messages SET pinned_at = NULL, pinned_by = NULL, pinned_until = NULL
+        WHERE pinned_at IS NOT NULL AND pinned_until IS NOT NULL AND pinned_until <= datetime('now')`).run();
+      expired.forEach((m) => io.to('turma_' + m.turma_id).emit('message_pin_update', {
+        id: m.id, turmaId: m.turma_id, pinned: false, pinnedByName: null, pinnedUntil: null
+      }));
+    }
+    // Mensagem fixada (ainda dentro do prazo) nao entra na limpeza automatica,
+    // mesmo depois de 5 dias.
     const old = db.prepare(`
       SELECT id, turma_id, attachment_id, poll_id FROM messages
       WHERE turma_id IS NOT NULL AND pinned_at IS NULL AND created_at < datetime('now', '-${TURMA_MESSAGE_LIFETIME_DAYS} days')

@@ -31,7 +31,7 @@
   // (a solicitacao em si e publica, na tela de login, sem precisar de conta).
   const SALA_RESERVA_ROLES = DIRECAO_ROLES;
 
-  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios', 'auditoria', 'recados', 'enquetes', 'sala-reservas'];
+  const NAV_VIEWS = ['turmas', 'mensagens', 'cardapio', 'financeiro', 'calendario', 'usuarios', 'auditoria', 'recados', 'sala-reservas'];
 
   const state = {
     user: null,
@@ -534,7 +534,6 @@
     document.getElementById('nav-usuarios').classList.toggle('hidden', !DIRECAO_ROLES.includes(state.user.role));
     document.getElementById('nav-auditoria').classList.toggle('hidden', !AUDIT_DM_ROLES.includes(state.user.role));
     document.getElementById('nav-recados').classList.toggle('hidden', !RECADO_CREATE_ROLES.includes(state.user.role));
-    document.getElementById('nav-enquetes').classList.toggle('hidden', !ENQUETE_CREATE_ROLES.includes(state.user.role));
     document.getElementById('nav-sala-reservas').classList.toggle('hidden', !SALA_RESERVA_ROLES.includes(state.user.role));
 
     connectSocket();
@@ -719,10 +718,12 @@
         loadRecadosScreen();
       }
     });
-    // Um recado foi cancelado antes de eu dar ciencia - tira da fila.
+    // Um recado foi apagado - tira da fila e da tela de gestao.
     state.socket.on('recado_canceled', ({ announcementId }) => {
       state.recadoQueue = state.recadoQueue.filter(q => q.id !== announcementId);
       showNextRecado();
+      const v = document.getElementById('view-recados');
+      if (v && !v.classList.contains('hidden')) loadRecadosScreen();
     });
     // Chegou uma enquete nova enquanto eu ja estava com o app aberto - busca
     // os dados completos e entra na fila (depois dos recados pendentes).
@@ -742,14 +743,16 @@
     state.socket.on('enquete_vote_update', () => {
       const modal = document.querySelector('#modal-root .modal-backdrop[data-enquete-id]');
       if (modal) openEnqueteResultsModal(Number(modal.dataset.enqueteId));
-      if (document.getElementById('view-enquetes') && !document.getElementById('view-enquetes').classList.contains('hidden')) {
+      if (document.getElementById('view-recados') && !document.getElementById('view-recados').classList.contains('hidden')) {
         loadEnquetesScreen();
       }
     });
-    // Uma enquete foi cancelada antes de eu votar - tira da fila.
+    // Uma enquete foi apagada - some da fila e da tela de gestao.
     state.socket.on('enquete_canceled', ({ enqueteId }) => {
       state.enqueteQueue = state.enqueteQueue.filter(q => q.id !== enqueteId);
       showNextEnquete();
+      const v = document.getElementById('view-recados');
+      if (v && !v.classList.contains('hidden')) loadEnquetesScreen();
     });
     // Chegou um pedido novo de reserva da sala (Colonia Z-13) - atualiza a
     // tela de gestao se ela estiver aberta agora.
@@ -818,7 +821,6 @@
     if (name === 'usuarios') loadUsuarios();
     if (name === 'auditoria') loadAuditoria();
     if (name === 'recados') loadRecadosScreen();
-    if (name === 'enquetes') loadEnquetesScreen();
     if (name === 'sala-reservas') loadSalaReservasAdmin();
     // abriu a aba = viu as novidades dela
     if (name === 'calendario') { markSeen('cal'); setNavBadge('calendario', 0); }
@@ -1167,7 +1169,7 @@
       bubble.textContent = msg.deletedByName ? `Mensagem removida por ${msg.deletedByName}` : 'Mensagem removida';
     } else {
       if (msg.pinned) {
-        const pinnedNote = el(`<div class="pinned-note">📌 Fixado${msg.pinnedByName ? ' por ' + escapeHtml(msg.pinnedByName) : ''}</div>`);
+        const pinnedNote = el(`<div class="pinned-note">${pinNoteText(msg.pinnedByName, msg.pinnedUntil)}</div>`);
         bubble.appendChild(pinnedNote);
       }
       if (msg.replyTo) {
@@ -1290,16 +1292,69 @@
   // ------------------------------------------------------------------
   // Fixar/desafixar mensagem da turma (so professora regente ou direcao)
   // ------------------------------------------------------------------
-  async function togglePinMessage(msgId) {
+  // Texto do aviso "Fixado por fulano ate 25/10" (o prazo vem do servidor em UTC)
+  function pinNoteText(byName, until) {
+    let txt = '📌 Fixado' + (byName ? ' por ' + escapeHtml(byName) : '');
+    if (until) {
+      const d = new Date(until.replace(' ', 'T') + 'Z');
+      if (!isNaN(d)) txt += ' até ' + d.toLocaleDateString('pt-BR');
+    }
+    return txt;
+  }
+
+  async function sendPinRequest(msgId, days) {
     try {
-      const data = await api(`/api/messages/${msgId}/pin`, { method: 'POST' });
+      const data = await api(`/api/messages/${msgId}/pin`, { method: 'POST', body: days ? { days } : {} });
       applyMessagePinUpdate({
         id: msgId, turmaId: state.chat.id, pinned: data.pinned,
-        pinnedByName: data.pinned ? state.user.name : null
+        pinnedByName: data.pinned ? state.user.name : null,
+        pinnedUntil: data.pinnedUntil || null
       });
     } catch (err) {
       alert('Erro ao fixar/desafixar mensagem: ' + err.message);
     }
+  }
+
+  async function togglePinMessage(msgId) {
+    const wrap = document.querySelector(`#chat-messages [data-msg-id="${msgId}"]`);
+    const alreadyPinned = !!(wrap && wrap.querySelector('.pinned-note'));
+    if (alreadyPinned) { sendPinRequest(msgId, null); return; } // desafixar direto
+    // Fixar: pergunta por quantos dias fica fixada (sem isso some em 5 dias)
+    openModal(`
+      <h3>Fixar mensagem</h3>
+      <p style="font-size:13px;color:#666">Mensagens comuns somem sozinhas depois de 5 dias. Escolha por quantos dias esta mensagem (texto, imagem ou PDF) fica fixada.</p>
+      <div class="field"><label>Fixar por</label>
+        <select id="pin-days">
+          <option value="1">1 dia</option>
+          <option value="3">3 dias</option>
+          <option value="7" selected>7 dias</option>
+          <option value="15">15 dias</option>
+          <option value="30">30 dias</option>
+          <option value="60">60 dias</option>
+          <option value="90">90 dias</option>
+          <option value="custom">Outro número de dias...</option>
+          <option value="">Sem prazo (até eu desafixar)</option>
+        </select>
+      </div>
+      <div class="field hidden" id="pin-custom-field"><label>Quantos dias (1 a 365)</label><input type="number" id="pin-custom-days" min="1" max="365" value="10" /></div>
+      <div class="modal-actions">
+        <button class="btn secondary" id="pin-cancel">Cancelar</button>
+        <button class="btn" id="pin-confirm">Fixar</button>
+      </div>
+    `);
+    const sel = document.getElementById('pin-days');
+    sel.addEventListener('change', () => {
+      document.getElementById('pin-custom-field').classList.toggle('hidden', sel.value !== 'custom');
+    });
+    document.getElementById('pin-cancel').addEventListener('click', closeModal);
+    document.getElementById('pin-confirm').addEventListener('click', () => {
+      let days = sel.value;
+      if (days === 'custom') days = document.getElementById('pin-custom-days').value;
+      days = days ? Math.floor(Number(days)) : null;
+      if (days !== null && (!days || days < 1 || days > 365)) { alert('Escolha de 1 a 365 dias'); return; }
+      closeModal();
+      sendPinRequest(msgId, days);
+    });
   }
 
   function applyMessagePinUpdate(data) {
@@ -1309,10 +1364,9 @@
     const bubble = wrap.querySelector('.bubble');
     const existingNote = bubble.querySelector('.pinned-note');
     if (data.pinned) {
-      if (!existingNote) {
-        const note = el(`<div class="pinned-note">📌 Fixado${data.pinnedByName ? ' por ' + escapeHtml(data.pinnedByName) : ''}</div>`);
-        bubble.insertBefore(note, bubble.firstChild);
-      }
+      const note = el(`<div class="pinned-note">${pinNoteText(data.pinnedByName, data.pinnedUntil)}</div>`);
+      if (existingNote) existingNote.replaceWith(note);
+      else bubble.insertBefore(note, bubble.firstChild);
     } else if (existingNote) {
       existingNote.remove();
     }
@@ -2096,6 +2150,7 @@
   });
 
   async function loadRecadosScreen() {
+    loadEnquetesScreen(); // a tela "Recados" mostra tambem as enquetes
     let announcements = [];
     try {
       const data = await api('/api/recados');
@@ -2119,7 +2174,7 @@
           <span>
             <span class="recado-admin-progress">${a.ackedCount}/${a.total} confirmaram</span>
             <button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:8px" data-view-acks="${a.id}">ver lista</button>
-            ${(!a.canceled && a.canCancel) ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:4px" data-cancel="${a.id}">cancelar</button>` : ''}
+            ${a.canCancel ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:4px;color:#c0392b" data-cancel="${a.id}">🗑 apagar</button>` : ''}
           </span>
         </div>
       </div>`);
@@ -2127,12 +2182,12 @@
       card.querySelector('[data-view-acks]').addEventListener('click', () => openRecadoAcksModal(a.id));
       const cancelBtn = card.querySelector('[data-cancel]');
       if (cancelBtn) cancelBtn.addEventListener('click', async () => {
-        if (!confirm('Cancelar este recado? Quem ainda nao viu deixa de receber.')) return;
+        if (!confirm('Apagar este recado de vez? Ele some para todo mundo (pais e gestao), junto com a lista de confirmacoes e o anexo. Nao da para desfazer.')) return;
         try {
           await api(`/api/recados/${a.id}`, { method: 'DELETE' });
           loadRecadosScreen();
         } catch (err) {
-          alert('Erro ao cancelar: ' + err.message);
+          alert('Erro ao apagar: ' + err.message);
         }
       });
       list.appendChild(card);
@@ -2346,19 +2401,19 @@
         <span>
           <span class="recado-admin-progress">${e.votedCount}/${e.total} votaram</span>
           <button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:8px" data-view-results="${e.id}">ver lista</button>
-          ${(!e.canceled && e.canCancel) ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:4px" data-cancel-enquete="${e.id}">cancelar</button>` : ''}
+          ${e.canCancel ? `<button class="btn ghost" style="padding:2px 8px;font-size:11px;margin-left:4px;color:#c0392b" data-cancel-enquete="${e.id}">🗑 apagar</button>` : ''}
         </span>
       </div>`);
       card.appendChild(metaEl);
       card.querySelector('[data-view-results]').addEventListener('click', () => openEnqueteResultsModal(e.id));
       const cancelBtn = card.querySelector('[data-cancel-enquete]');
       if (cancelBtn) cancelBtn.addEventListener('click', async () => {
-        if (!confirm('Cancelar esta enquete? Quem ainda nao votou deixa de receber.')) return;
+        if (!confirm('Apagar esta enquete de vez? Ela some para todo mundo (pais e gestao), junto com os votos. Nao da para desfazer.')) return;
         try {
           await api(`/api/enquetes/${e.id}`, { method: 'DELETE' });
           loadEnquetesScreen();
         } catch (err) {
-          alert('Erro ao cancelar: ' + err.message);
+          alert('Erro ao apagar: ' + err.message);
         }
       });
       list.appendChild(card);
@@ -3107,8 +3162,7 @@
     const nMsgs = (state.conversations || []).reduce((s, c) => s + (c.unread_count || 0), 0);
     setNavBadge('turmas', nTurmas);
     setNavBadge('mensagens', nMsgs);
-    setNavBadge('recados', state.recadoQueue.length);
-    setNavBadge('enquetes', state.enqueteQueue.length);
+    setNavBadge('recados', state.recadoQueue.length + state.enqueteQueue.length);
     setAppIconBadge(nTurmas + nMsgs + state.recadoQueue.length + state.enqueteQueue.length);
   }
 

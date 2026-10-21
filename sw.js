@@ -16,7 +16,7 @@
 // baixar tudo de novo automaticamente, em vez de continuar usando uma copia
 // antiga guardada no celular.
 // ---------------------------------------------------------------------------
-const CACHE_VERSION = 'cei-angela-amin-v3';
+const CACHE_VERSION = 'cei-angela-amin-v4';
 
 const APP_SHELL = [
   '/',

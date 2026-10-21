@@ -182,7 +182,6 @@
     <button data-view="calendario">Calendário</button>
     <button data-view="usuarios" id="nav-usuarios" class="hidden">Usuarios</button>
     <button data-view="recados" id="nav-recados" class="hidden">Recados</button>
-    <button data-view="enquetes" id="nav-enquetes" class="hidden">Enquetes</button>
     <button data-view="auditoria" id="nav-auditoria" class="hidden">Auditoria</button>
     <button data-view="sala-reservas" id="nav-sala-reservas" class="hidden">Sala Colônia Z-13</button>
   </div>
@@ -290,24 +289,18 @@
   <!-- ---------- RECADOS (Direcao) ---------- -->
   <div class="view hidden" id="view-recados">
     <div class="view-header">
-      <h2>Recados</h2>
-      <button class="btn" id="btn-new-recado">+ Novo recado</button>
+      <h2>Recados e enquetes</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="btn-new-recado">+ Novo recado</button>
+        <button class="btn" id="btn-new-enquete">+ Nova enquete</button>
+      </div>
     </div>
     <p style="font-size:13px;color:#666;margin:-6px 0 12px">
-      O recado aparece na tela de todo mundo assim que a pessoa abrir o aplicativo, e so some depois que ela clicar em "Dar ciência". Aqui embaixo voce acompanha quem ja confirmou.
+      O recado ou a enquete aparece na tela de todo mundo assim que a pessoa abrir o aplicativo, e so some depois que ela clicar em "Dar ciência" (recado) ou votar (enquete). Aqui embaixo voce acompanha quem ja respondeu e pode apagar quando quiser - apagado, some para todos e libera espaço.
     </p>
+    <h3 style="margin:8px 0">📢 Recados</h3>
     <div id="recados-list"></div>
-  </div>
-
-  <!-- ---------- ENQUETES ---------- -->
-  <div class="view hidden" id="view-enquetes">
-    <div class="view-header">
-      <h2>Enquetes</h2>
-      <button class="btn" id="btn-new-enquete">+ Nova enquete</button>
-    </div>
-    <p style="font-size:13px;color:#666;margin:-6px 0 12px">
-      A enquete aparece na tela de todo mundo assim que a pessoa abrir o aplicativo, e so some depois que ela votar. Aqui embaixo voce acompanha o resultado.
-    </p>
+    <h3 style="margin:18px 0 8px">📊 Enquetes</h3>
     <div id="enquetes-list"></div>
   </div>
 

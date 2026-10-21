@@ -298,3 +298,9 @@ Achou alguma dessas regras diferente do que sua creche precisa? É só pedir —
 ## Número no ícone do app (tela inicial)
 
 O app instalado mostra no ícone a quantidade de pendências (mensagens não lidas das turmas e conversas + recados e enquetes ainda não respondidos), como os outros aplicativos. O número é atualizado pelo app aberto (Badging API) e, com o app fechado, pelas notificações push: o servidor envia o total de cada pessoa no campo `badge` (`getUserBadgeTotal` em `server.js`) e o `sw.js` aplica no ícone. No iPhone exige iOS 16.4+, app adicionado à Tela de Início e notificações permitidas.
+
+## Recados + enquetes na mesma aba, apagar e fixar com prazo
+
+- A aba "Enquetes" foi unida à aba "Recados" (botões "+ Novo recado" e "+ Nova enquete"). Comportamento igual: aparece em tela cheia e só some quando a pessoa dá ciência / vota.
+- Direção/Gestor (ou quem criou) pode **apagar** recado ou enquete: some de vez para pais e gestão (confirmações, votos e anexo também são removidos do banco/disco). Recados/enquetes "cancelados" na versão antiga são removidos automaticamente na subida do servidor.
+- Fixar mensagem na turma agora pergunta **por quantos dias** (1 a 365, ou sem prazo). Coluna nova `messages.pinned_until` (migração automática). Vencido o prazo, volta à regra normal dos 5 dias.
