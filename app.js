@@ -3103,10 +3103,23 @@
   }
 
   function updateUnreadNavBadges() {
-    setNavBadge('turmas', (state.turmas || []).reduce((s, t) => s + (t.unread_count || 0), 0));
-    setNavBadge('mensagens', (state.conversations || []).reduce((s, c) => s + (c.unread_count || 0), 0));
+    const nTurmas = (state.turmas || []).reduce((s, t) => s + (t.unread_count || 0), 0);
+    const nMsgs = (state.conversations || []).reduce((s, c) => s + (c.unread_count || 0), 0);
+    setNavBadge('turmas', nTurmas);
+    setNavBadge('mensagens', nMsgs);
     setNavBadge('recados', state.recadoQueue.length);
     setNavBadge('enquetes', state.enqueteQueue.length);
+    setAppIconBadge(nTurmas + nMsgs + state.recadoQueue.length + state.enqueteQueue.length);
+  }
+
+  // Numerinho vermelho no icone do app na tela inicial (Badging API).
+  // Funciona no app instalado: iPhone (iOS 16.4+, "Adicionar a Tela de Inicio"
+  // + notificacoes permitidas), Android e computador (Chrome/Edge).
+  function setAppIconBadge(count) {
+    try {
+      if (count > 0 && navigator.setAppBadge) navigator.setAppBadge(count).catch(() => {});
+      else if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
+    } catch (e) { /* aparelho sem suporte: ignora */ }
   }
 
   async function refreshNavBadges() {

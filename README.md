@@ -294,3 +294,7 @@ Achou alguma dessas regras diferente do que sua creche precisa? É só pedir —
 - Sessões ficam em memória: reiniciar o servidor derruba todo mundo logado. Para produção com mais uso, trocar por um "session store" persistente (ex. `connect-sqlite3`) é recomendado.
 - Não há recuperação de senha por e-mail (seria o próximo passo natural).
 - Bloqueio de download de fotos/PDFs é "best effort" (explicado acima).
+
+## Número no ícone do app (tela inicial)
+
+O app instalado mostra no ícone a quantidade de pendências (mensagens não lidas das turmas e conversas + recados e enquetes ainda não respondidos), como os outros aplicativos. O número é atualizado pelo app aberto (Badging API) e, com o app fechado, pelas notificações push: o servidor envia o total de cada pessoa no campo `badge` (`getUserBadgeTotal` em `server.js`) e o `sw.js` aplica no ícone. No iPhone exige iOS 16.4+, app adicionado à Tela de Início e notificações permitidas.

@@ -510,8 +510,11 @@ function getUserIdsInRoom(room) {
 function sendPushToUsers(userIds, payload) {
   if (!PUSH_ENABLED || !userIds || !userIds.length) return;
   const uniqueIds = [...new Set(userIds)];
-  const json = JSON.stringify(payload);
   uniqueIds.forEach((uid) => {
+    // "badge" = numerinho do icone do app (cada pessoa tem o seu)
+    let badge;
+    try { badge = getUserBadgeTotal(uid); } catch (e) { badge = undefined; }
+    const json = JSON.stringify(badge === undefined ? payload : { ...payload, badge });
     const subs = db.prepare('SELECT * FROM push_subscriptions WHERE user_id = ?').all(uid);
     subs.forEach((sub) => {
       const pushSubscription = { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } };
@@ -1152,6 +1155,50 @@ const UNREAD_TURMA_SUBQUERY = `(
   WHERE m.turma_id = t.id AND m.user_id != ? AND m.deleted_at IS NULL
     AND m.id > COALESCE((SELECT last_read_message_id FROM turma_message_reads WHERE user_id = ? AND turma_id = t.id), 0)
 ) as unread_count`;
+
+// Total que aparece no "numerinho" do icone do app na tela inicial do celular
+// (mensagens nao lidas nas turmas e nas conversas privadas + recados e
+// enquetes ainda nao respondidos). Mandado junto com cada notificacao push,
+// pra o numero do icone atualizar mesmo com o app fechado.
+function getUserBadgeTotal(userId) {
+  const user = db.prepare('SELECT id, role FROM users WHERE id = ? AND active = 1').get(userId);
+  if (!user) return 0;
+  let total = 0;
+  const turmaRows = user.role === 'gestor'
+    ? db.prepare(`SELECT ${UNREAD_TURMA_SUBQUERY} FROM turmas t`).all(user.id, user.id)
+    : db.prepare(`
+        SELECT ${UNREAD_TURMA_SUBQUERY} FROM turmas t
+        JOIN turma_members tm ON tm.turma_id = t.id WHERE tm.user_id = ?
+      `).all(user.id, user.id, user.id);
+  turmaRows.forEach(r => { total += r.unread_count || 0; });
+
+  const ageSql = user.role === 'pai' ? `AND m.created_at >= datetime('now', '-${DM_MESSAGE_LIFETIME_DAYS} days')` : '';
+  total += db.prepare(`
+    SELECT COUNT(*) as n FROM dm_messages m
+    JOIN conversations c ON c.id = m.conversation_id
+    WHERE (c.user_a_id = ? OR c.user_b_id = ?) AND m.sender_id != ? AND m.deleted_at IS NULL
+      AND m.id NOT IN (SELECT message_id FROM dm_message_hidden WHERE user_id = ?)
+      AND m.id > COALESCE((SELECT last_read_message_id FROM conversation_message_reads WHERE user_id = ? AND conversation_id = c.id), 0)
+      ${ageSql}
+  `).get(user.id, user.id, user.id, user.id, user.id).n;
+
+  total += db.prepare(`
+    SELECT COUNT(*) as n FROM announcements a
+    WHERE a.canceled_at IS NULL AND a.created_by != ?
+      AND (a.audience_type = 'all'
+           OR a.turma_id IN (SELECT turma_id FROM turma_members WHERE user_id = ?)
+           OR a.id IN (SELECT announcement_id FROM announcement_turmas WHERE turma_id IN (SELECT turma_id FROM turma_members WHERE user_id = ?)))
+      AND a.id NOT IN (SELECT announcement_id FROM announcement_acks WHERE user_id = ?)
+  `).get(user.id, user.id, user.id, user.id).n;
+
+  total += db.prepare(`
+    SELECT COUNT(*) as n FROM enquetes e
+    WHERE e.canceled_at IS NULL AND e.created_by != ?
+      AND (e.audience_type = 'all' OR e.turma_id IN (SELECT turma_id FROM turma_members WHERE user_id = ?))
+      AND e.id NOT IN (SELECT enquete_id FROM enquete_votes WHERE user_id = ?)
+  `).get(user.id, user.id, user.id).n;
+  return total;
+}
 
 app.get('/api/turmas', requireAuth, (req, res) => {
   // Gestor enxerga todas as turmas da creche (acesso total), mesmo sem ter entrado nelas

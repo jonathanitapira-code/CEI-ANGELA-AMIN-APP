@@ -16,7 +16,7 @@
 // baixar tudo de novo automaticamente, em vez de continuar usando uma copia
 // antiga guardada no celular.
 // ---------------------------------------------------------------------------
-const CACHE_VERSION = 'cei-angela-amin-v2';
+const CACHE_VERSION = 'cei-angela-amin-v3';
 
 const APP_SHELL = [
   '/',
@@ -95,7 +95,16 @@ self.addEventListener('push', (event) => {
   if (event.data) {
     try { data = Object.assign(data, event.data.json()); } catch (e) { /* usa o padrao acima */ }
   }
-  event.waitUntil(
+  // Atualiza o numerinho do icone do app (o servidor manda o total em "badge")
+  let badgePromise = Promise.resolve();
+  try {
+    if (typeof data.badge === 'number' && self.navigator) {
+      if (data.badge > 0 && self.navigator.setAppBadge) badgePromise = self.navigator.setAppBadge(data.badge);
+      else if (self.navigator.clearAppBadge) badgePromise = self.navigator.clearAppBadge();
+    }
+  } catch (e) { /* sem suporte: ignora */ }
+  event.waitUntil(Promise.all([
+    Promise.resolve(badgePromise).catch(() => {}),
     self.registration.showNotification(data.title, {
       body: data.body,
       icon: '/icon-192.png',
@@ -103,7 +112,7 @@ self.addEventListener('push', (event) => {
       data: { url: data.url || '/' },
       tag: data.url || undefined // mensagens novas da mesma conversa substituem a notificacao anterior, em vez de empilhar
     })
-  );
+  ]));
 });
 
 // Ao clicar na notificacao: foca uma aba ja aberta do app (levando para a
