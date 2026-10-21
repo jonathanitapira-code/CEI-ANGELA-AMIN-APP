@@ -545,7 +545,13 @@
     await handlePendingInvite();
     await loadTurmas();
     await openDeepLinkFromUrl(location.href);
-    checkPendingRecados();
+    checkPendingRecados().then(updateUnreadNavBadges);
+    refreshNavBadges();
+    // confere novidades de tempos em tempos e quando a pessoa volta pro app
+    if (!state.navBadgeTimer) {
+      state.navBadgeTimer = setInterval(refreshNavBadges, 60000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshNavBadges(); });
+    }
 
     // limpa o parametro ?invite=/?openTurma=/?openConversation= da URL para
     // nao repetir o fluxo em um refresh
@@ -721,7 +727,16 @@
     // Chegou uma enquete nova enquanto eu ja estava com o app aberto - busca
     // os dados completos e entra na fila (depois dos recados pendentes).
     state.socket.on('new_enquete', () => {
-      checkPendingEnquetes();
+      checkPendingEnquetes().then(updateUnreadNavBadges);
+    });
+    // Evento novo no calendario ou item novo no cardapio - atualiza os numerinhos das abas.
+    // Se a pessoa esta olhando aquela aba agora, recarrega a tela tambem.
+    state.socket.on('nav_refresh', ({ what }) => {
+      const active = document.querySelector('.nav-tabs button.active');
+      const view = active ? active.dataset.view : null;
+      if (what === 'calendario' && view === 'calendario') loadCalendario().catch(() => {});
+      if (what === 'cardapio' && view === 'cardapio') loadCardapio().catch(() => {});
+      refreshNavBadges();
     });
     // Alguem votou numa enquete que eu criei - atualiza a tela de gestao se estiver aberta.
     state.socket.on('enquete_vote_update', () => {
@@ -739,6 +754,7 @@
     // Chegou um pedido novo de reserva da sala (Colonia Z-13) - atualiza a
     // tela de gestao se ela estiver aberta agora.
     state.socket.on('sala_reserva_nova', () => {
+      refreshNavBadges();
       if (document.getElementById('view-sala-reservas') && !document.getElementById('view-sala-reservas').classList.contains('hidden')) {
         loadSalaReservasAdmin();
       }
@@ -804,6 +820,9 @@
     if (name === 'recados') loadRecadosScreen();
     if (name === 'enquetes') loadEnquetesScreen();
     if (name === 'sala-reservas') loadSalaReservasAdmin();
+    // abriu a aba = viu as novidades dela
+    if (name === 'calendario') { markSeen('cal'); setNavBadge('calendario', 0); }
+    if (name === 'cardapio') { markSeen('card'); setNavBadge('cardapio', 0); }
   }
 
   function leaveChatSocketIfNeeded() {
@@ -820,6 +839,7 @@
   async function loadTurmas() {
     const data = await api('/api/turmas');
     state.turmas = data.turmas;
+    updateUnreadNavBadges();
     const grid = document.getElementById('turma-grid');
     grid.innerHTML = '';
     if (!data.turmas.length) {
@@ -955,6 +975,7 @@
   function markTurmaAsRead(turmaId) {
     const t = state.turmas.find(x => x.id === turmaId);
     if (t) t.unread_count = 0;
+    updateUnreadNavBadges();
     api(`/api/turmas/${turmaId}/read`, { method: 'POST' }).catch(() => {});
   }
 
@@ -1584,6 +1605,7 @@
   async function loadConversations() {
     const data = await api('/api/conversations');
     state.conversations = data.conversations;
+    updateUnreadNavBadges();
     const grid = document.getElementById('conversa-grid');
     grid.innerHTML = '';
     if (!data.conversations.length) {
@@ -1757,6 +1779,7 @@
   function markConversationAsRead(conversationId) {
     const c = state.conversations.find(x => x.id === conversationId);
     if (c) c.unread_count = 0;
+    updateUnreadNavBadges();
     api(`/api/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => {});
   }
 
@@ -1976,6 +1999,7 @@
 
   function showNextRecado() {
     const overlay = document.getElementById('recado-overlay');
+    updateUnreadNavBadges();
     if (!state.recadoQueue.length) {
       overlay.classList.add('hidden');
       showNextEnquete();
@@ -2231,6 +2255,7 @@
 
   function showNextEnquete() {
     const overlay = document.getElementById('enquete-overlay');
+    updateUnreadNavBadges();
     if (!state.enqueteQueue.length) {
       overlay.classList.add('hidden');
       return;
@@ -2726,6 +2751,44 @@
       events = data.events;
     } catch (err) { /* mostra o mes vazio se der erro */ }
     renderCalendarGrid(state.calMonth.getFullYear(), state.calMonth.getMonth(), events);
+    renderCalendarAgenda(state.calMonth.getFullYear(), state.calMonth.getMonth(), events);
+  }
+
+  // Legenda do mes embaixo do calendario: "21/10 - Não haverá aula", feriados e eventos.
+  function renderCalendarAgenda(year, monthIndex, events) {
+    const box = document.getElementById('cal-agenda');
+    box.innerHTML = '';
+    const holidays = getBrazilianHolidays(year);
+    const items = [];
+    Object.entries(holidays).forEach(([d, name]) => {
+      const [yy, mm] = d.split('-').map(Number);
+      if (yy === year && mm - 1 === monthIndex) items.push({ date: d, kind: 'holiday', text: name });
+    });
+    events.forEach(ev => {
+      if (ev.noClass) {
+        items.push({
+          date: ev.date, kind: 'noclass',
+          text: 'Não haverá aula',
+          sub: [ev.turmaName ? `Turma: ${ev.turmaName}` : 'Todas as turmas', ev.title, ev.description].filter(Boolean).join(' · ')
+        });
+      } else {
+        items.push({ date: ev.date, kind: 'event', text: ev.title, sub: ev.description || '' });
+      }
+    });
+    items.sort((a, b) => a.date.localeCompare(b.date));
+    if (!items.length) {
+      box.innerHTML = '<div class="empty-state" style="padding:12px 0">Nada marcado neste mês.</div>';
+      return;
+    }
+    items.forEach(it => {
+      const [yy, mm, dd] = it.date.split('-');
+      const dotClass = it.kind === 'noclass' ? 'noclass' : it.kind === 'holiday' ? 'holiday' : 'event';
+      box.appendChild(el(`<div class="cal-agenda-row${it.kind === 'noclass' ? ' noclass' : ''}">
+        <i class="cal-dot ${dotClass}"></i>
+        <span class="cal-agenda-date">${dd}/${mm}</span>
+        <span>- ${escapeHtml(it.text)}${it.sub ? `<div class="cal-agenda-sub">${escapeHtml(it.sub)}</div>` : ''}</span>
+      </div>`));
+    });
   }
 
   function renderCalendarGrid(year, monthIndex, events) {
@@ -2755,13 +2818,15 @@
       const holidayName = holidays[dateStr];
       const dayEvents = eventsByDay[dateStr] || [];
 
-      const cell = el(`<div class="cal-day${isWeekend ? ' weekend' : ''}${holidayName ? ' holiday' : ''}${dateStr === todayStr2 ? ' today' : ''}"></div>`);
+      const hasNoClass = dayEvents.some(ev => ev.noClass);
+      const cell = el(`<div class="cal-day${isWeekend ? ' weekend' : ''}${holidayName ? ' holiday' : ''}${hasNoClass ? ' noclass' : ''}${dateStr === todayStr2 ? ' today' : ''}"></div>`);
       cell.appendChild(el(`<div class="cal-day-num">${day}</div>`));
       if (holidayName) {
         cell.appendChild(el(`<div class="cal-holiday-label" title="${escapeHtml(holidayName)}">${escapeHtml(holidayName)}</div>`));
       }
       dayEvents.forEach(ev => {
-        const chip = el(`<div class="cal-event-chip" title="${escapeHtml(ev.title)}">${escapeHtml(ev.title)}</div>`);
+        const chipLabel = ev.noClass ? `Sem aula${ev.turmaName ? ' - ' + ev.turmaName : ''}` : ev.title;
+        const chip = el(`<div class="cal-event-chip${ev.noClass ? ' noclass' : ''}" title="${escapeHtml(chipLabel)}">${escapeHtml(chipLabel)}</div>`);
         chip.addEventListener('click', (e) => { e.stopPropagation(); openEventoModal(ev); });
         cell.appendChild(chip);
       });
@@ -2790,6 +2855,7 @@
       openModal(`
         <h3>${escapeHtml(ev.title)}</h3>
         <p style="font-size:13px;color:#666">${ev.date.split('-').reverse().join('/')}</p>
+        ${ev.noClass ? `<p style="font-size:13px;color:#c27b00;font-weight:700">Não haverá aula — ${ev.turmaName ? escapeHtml(ev.turmaName) : 'todas as turmas'}</p>` : ''}
         ${ev.description ? `<p style="font-size:14px;white-space:pre-wrap">${escapeHtml(ev.description)}</p>` : ''}
         <p style="font-size:12px;color:#999">Adicionado por ${escapeHtml(ev.authorName)}</p>
         <div class="modal-actions"><button class="btn" id="close-evento">Fechar</button></div>
@@ -2802,6 +2868,14 @@
       <div class="field"><label>Data</label><input type="date" id="evento-date" value="${ev ? ev.date : defaultDate}" /></div>
       <div class="field"><label>Título</label><input id="evento-title" placeholder="Ex: Reunião de pais, Festa da família, Arraiá cultural..." value="${ev ? escapeHtml(ev.title) : ''}" /></div>
       <div class="field"><label>Descrição (opcional)</label><textarea id="evento-desc" rows="3">${ev ? escapeHtml(ev.description || '') : ''}</textarea></div>
+      <div class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row">
+        <input type="checkbox" id="evento-noclass" style="width:auto" ${ev && ev.noClass ? 'checked' : ''} />
+        <label style="margin:0" for="evento-noclass">Dia sem aula (aparece em laranja no calendário)</label>
+      </div>
+      <div class="field">
+        <label>Vale para qual turma?</label>
+        <select id="evento-turma"><option value="">Todas as turmas</option></select>
+      </div>
       <div class="error-msg" id="evento-error"></div>
       <div class="modal-actions">
         ${ev ? '<button class="btn ghost" id="delete-evento" style="color:var(--red)">Excluir</button>' : ''}
@@ -2810,6 +2884,18 @@
       </div>
     `);
     document.getElementById('cancel-evento').addEventListener('click', closeModal);
+    // Lista de turmas pro "Vale para qual turma?" (so Direcao/Gestor chegam aqui)
+    api('/api/turmas/all').then((data) => {
+      const sel = document.getElementById('evento-turma');
+      if (!sel) return;
+      data.turmas.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = t.name;
+        sel.appendChild(opt);
+      });
+      if (ev && ev.turmaId) sel.value = String(ev.turmaId);
+    }).catch(() => {});
     const delBtn = document.getElementById('delete-evento');
     if (delBtn) delBtn.addEventListener('click', async () => {
       if (!confirm('Excluir este evento do calendário?')) return;
@@ -2826,8 +2912,11 @@
       const body = {
         date: document.getElementById('evento-date').value,
         title: document.getElementById('evento-title').value.trim(),
-        description: document.getElementById('evento-desc').value.trim()
+        description: document.getElementById('evento-desc').value.trim(),
+        noClass: document.getElementById('evento-noclass').checked,
+        turmaId: document.getElementById('evento-turma').value || null
       };
+      if (!body.title && body.noClass) body.title = 'Não haverá aula';
       if (!body.title) { errBox.textContent = 'Informe um título para o evento'; return; }
       try {
         if (ev) {
@@ -2955,6 +3044,66 @@
         openDeepLinkFromUrl(event.data.url);
       }
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Numerinhos de notificacao nas abas do topo (Turmas, Mensagens, Cardapio,
+  // Calendario, Recados, Enquetes, Sala Colonia) - o pai ve que tem novidade
+  // sem precisar abrir cada aba. Cardapio e Calendario contam o que foi
+  // criado por outra pessoa desde a ultima vez que essa aba foi aberta
+  // (guardado neste navegador); as demais usam nao lidas / pendencias.
+  // ------------------------------------------------------------------
+  function seenKey(name) { return `cei_seen_${name}_${state.user ? state.user.id : 0}`; }
+  function getSeen(name) {
+    let v = null;
+    try { v = localStorage.getItem(seenKey(name)); } catch (e) { /* ignora */ }
+    if (!v) { v = new Date().toISOString(); markSeen(name, v); }
+    return v;
+  }
+  function markSeen(name, value) {
+    try { localStorage.setItem(seenKey(name), value || new Date().toISOString()); } catch (e) { /* ignora */ }
+  }
+
+  function setNavBadge(view, count) {
+    const btn = document.querySelector(`.nav-tabs button[data-view="${view}"]`);
+    if (!btn) return;
+    let badge = btn.querySelector('.nav-badge');
+    if (!count || count <= 0) { if (badge) badge.remove(); return; }
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'nav-badge';
+      btn.appendChild(badge);
+    }
+    badge.textContent = count > 99 ? '99+' : String(count);
+  }
+
+  function updateUnreadNavBadges() {
+    setNavBadge('turmas', (state.turmas || []).reduce((s, t) => s + (t.unread_count || 0), 0));
+    setNavBadge('mensagens', (state.conversations || []).reduce((s, c) => s + (c.unread_count || 0), 0));
+    setNavBadge('recados', state.recadoQueue.length);
+    setNavBadge('enquetes', state.enqueteQueue.length);
+  }
+
+  async function refreshNavBadges() {
+    if (!state.user) return;
+    const activeBtn = document.querySelector('.nav-tabs button.active');
+    const activeView = activeBtn ? activeBtn.dataset.view : null;
+    // aba que esta aberta agora conta como "vista"
+    if (activeView === 'calendario') markSeen('cal');
+    if (activeView === 'cardapio') markSeen('card');
+    try {
+      const [turmasData, convData, nav] = await Promise.all([
+        api('/api/turmas'),
+        api('/api/conversations'),
+        api(`/api/nav-badges?calSince=${encodeURIComponent(getSeen('cal'))}&cardSince=${encodeURIComponent(getSeen('card'))}`)
+      ]);
+      state.turmas = turmasData.turmas;
+      state.conversations = convData.conversations;
+      updateUnreadNavBadges();
+      setNavBadge('calendario', nav.calendario);
+      setNavBadge('cardapio', nav.cardapio);
+      setNavBadge('sala-reservas', nav.sala);
+    } catch (err) { /* silencioso: so nao mostra o numero */ }
   }
 
   // ------------------------------------------------------------------

@@ -405,6 +405,16 @@ const financeiroColumns = db.prepare('PRAGMA table_info(financeiro)').all().map(
   }
 });
 
+// Dia sem aula no calendario: "no_class" marca o evento como "Nao havera aula"
+// e "turma_id" (opcional) restringe a uma turma especifica (NULL = todas).
+const calendarColumns = db.prepare('PRAGMA table_info(calendar_events)').all().map(c => c.name);
+if (!calendarColumns.includes('no_class')) {
+  db.exec('ALTER TABLE calendar_events ADD COLUMN no_class INTEGER NOT NULL DEFAULT 0');
+}
+if (!calendarColumns.includes('turma_id')) {
+  db.exec('ALTER TABLE calendar_events ADD COLUMN turma_id INTEGER');
+}
+
 // ---------------------------------------------------------------------------
 // App / middlewares
 // ---------------------------------------------------------------------------
@@ -2609,6 +2619,7 @@ app.post('/api/cardapio', requireAuth, requireRole(...CARDAPIO_ROLES), (req, res
   const row = db.prepare(`
     SELECT c.*, u.name as author_name FROM cardapio c JOIN users u ON u.id = c.created_by WHERE c.id = ?
   `).get(info.lastInsertRowid);
+  io.emit('nav_refresh', { what: 'cardapio' });
   res.json({ item: row });
 });
 
@@ -2645,7 +2656,41 @@ app.delete('/api/cardapio/:id', requireAuth, requireRole(...CARDAPIO_ROLES), (re
 // aqui so ficam os eventos que a creche cadastra, tipo reuniao de pais)
 // ---------------------------------------------------------------------------
 
-// Todo mundo logado pode ver. Filtra por mes (?month=YYYY-MM) ou devolve tudo.
+// Evento de calendario "de uma turma so" (ex: dia sem aula so pra uma turma)
+// so aparece pra quem e dessa turma ou pra quem edita o calendario/Gestor.
+// Evento sem turma (turma_id NULL) aparece pra todo mundo.
+function canSeeCalendarEvent(e, user) {
+  if (!e.turma_id) return true;
+  if (user.role === 'gestor' || CALENDARIO_EDIT_ROLES.includes(user.role)) return true;
+  return !!isTurmaMember(e.turma_id, user.id);
+}
+
+function calendarEventPayload(e) {
+  let turmaName = null;
+  if (e.turma_id) {
+    const t = db.prepare('SELECT name FROM turmas WHERE id = ?').get(e.turma_id);
+    turmaName = t ? t.name : null;
+  }
+  return {
+    id: e.id, date: e.date, title: e.title, description: e.description, authorName: e.author_name,
+    noClass: !!e.no_class, turmaId: e.turma_id || null, turmaName
+  };
+}
+
+// Valida e normaliza os campos novos (dia sem aula + turma opcional).
+function parseCalendarExtras(body) {
+  const noClass = body.noClass ? 1 : 0;
+  let turmaId = null;
+  if (body.turmaId) {
+    const turma = db.prepare('SELECT id FROM turmas WHERE id = ?').get(body.turmaId);
+    if (!turma) return { error: 'Turma invalida' };
+    turmaId = turma.id;
+  }
+  return { noClass, turmaId };
+}
+
+// Todo mundo logado pode ver (respeitando eventos de turma especifica).
+// Filtra por mes (?month=YYYY-MM) ou devolve tudo.
 app.get('/api/calendario', requireAuth, (req, res) => {
   const month = req.query.month;
   const rows = month
@@ -2660,9 +2705,7 @@ app.get('/api/calendario', requireAuth, (req, res) => {
         ORDER BY e.date ASC
       `).all();
   res.json({
-    events: rows.map(e => ({
-      id: e.id, date: e.date, title: e.title, description: e.description, authorName: e.author_name
-    }))
+    events: rows.filter(e => canSeeCalendarEvent(e, req.user)).map(calendarEventPayload)
   });
 });
 
@@ -2674,13 +2717,16 @@ app.post('/api/calendario', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES), 
   if (!title || !title.trim()) {
     return res.status(400).json({ error: 'Informe um titulo para o evento' });
   }
+  const extras = parseCalendarExtras(req.body);
+  if (extras.error) return res.status(400).json({ error: extras.error });
   const info = db.prepare(
-    'INSERT INTO calendar_events (date, title, description, created_by) VALUES (?, ?, ?, ?)'
-  ).run(date, title.trim(), (description || '').trim() || null, req.user.id);
+    'INSERT INTO calendar_events (date, title, description, created_by, no_class, turma_id) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(date, title.trim(), (description || '').trim() || null, req.user.id, extras.noClass, extras.turmaId);
   const row = db.prepare(`
     SELECT e.*, u.name as author_name FROM calendar_events e JOIN users u ON u.id = e.created_by WHERE e.id = ?
   `).get(info.lastInsertRowid);
-  res.json({ event: { id: row.id, date: row.date, title: row.title, description: row.description, authorName: row.author_name } });
+  io.emit('nav_refresh', { what: 'calendario' });
+  res.json({ event: calendarEventPayload(row) });
 });
 
 app.put('/api/calendario/:id', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES), (req, res) => {
@@ -2693,9 +2739,38 @@ app.put('/api/calendario/:id', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES
   if (!title || !title.trim()) {
     return res.status(400).json({ error: 'Informe um titulo para o evento' });
   }
-  db.prepare('UPDATE calendar_events SET date = ?, title = ?, description = ? WHERE id = ?')
-    .run(date, title.trim(), (description || '').trim() || null, item.id);
+  const extras = parseCalendarExtras(req.body);
+  if (extras.error) return res.status(400).json({ error: extras.error });
+  db.prepare('UPDATE calendar_events SET date = ?, title = ?, description = ?, no_class = ?, turma_id = ? WHERE id = ?')
+    .run(date, title.trim(), (description || '').trim() || null, extras.noClass, extras.turmaId, item.id);
+  io.emit('nav_refresh', { what: 'calendario' });
   res.json({ ok: true });
+});
+
+// Numerinhos nas abas do topo (Cardapio, Calendario, Sala Colonia). Turmas e
+// Mensagens usam a contagem de nao lidas que ja existia. "calSince"/"cardSince"
+// sao o momento em que a pessoa abriu cada aba pela ultima vez (guardado no
+// proprio navegador) - conta so o que foi criado por OUTRA pessoa depois disso.
+function sqliteTimestamp(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().replace('T', ' ').slice(0, 19);
+}
+app.get('/api/nav-badges', requireAuth, (req, res) => {
+  const out = { calendario: 0, cardapio: 0, sala: 0 };
+  const calSince = sqliteTimestamp(req.query.calSince);
+  const cardSince = sqliteTimestamp(req.query.cardSince);
+  if (calSince) {
+    const rows = db.prepare('SELECT * FROM calendar_events WHERE created_at > ? AND created_by != ?').all(calSince, req.user.id);
+    out.calendario = rows.filter(e => canSeeCalendarEvent(e, req.user)).length;
+  }
+  if (cardSince) {
+    out.cardapio = db.prepare('SELECT COUNT(*) as n FROM cardapio WHERE created_at > ? AND created_by != ?').get(cardSince, req.user.id).n;
+  }
+  if (req.user.role === 'gestor' || SALA_RESERVA_ROLES.includes(req.user.role)) {
+    out.sala = db.prepare(`SELECT COUNT(*) as n FROM sala_reservas WHERE status = 'pendente'`).get().n;
+  }
+  res.json(out);
 });
 
 app.delete('/api/calendario/:id', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES), (req, res) => {

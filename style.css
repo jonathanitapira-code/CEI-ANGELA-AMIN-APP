@@ -347,6 +347,27 @@ table.fin-table td.amount-receita, table.fin-table td.amount-despesa { font-weig
 .cal-dot.weekend { background: #d8dbe0; }
 .cal-dot.holiday { background: #f6c6c0; }
 .cal-dot.event { background: var(--blue, #4a90d9); }
+.cal-dot.noclass { background: #f5a623; }
+/* dia sem aula (laranja, diferente de feriado/evento) */
+.cal-day.noclass { background: #fff1d6; border-color: #f5c77a; }
+.cal-day.noclass .cal-day-num { color: #c27b00; }
+.cal-event-chip.noclass { background: #f5a623; }
+.cal-agenda-row {
+  display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; margin-bottom: 6px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; font-size: 14px; color: var(--gray);
+}
+.cal-agenda-row .cal-dot { margin-top: 5px; flex-shrink: 0; }
+.cal-agenda-row.noclass { background: #fff8ea; border-color: #f5c77a; }
+.cal-agenda-date { font-weight: 700; min-width: 44px; }
+.cal-agenda-sub { font-size: 12px; color: var(--gray-light); }
+
+/* numerinho de notificacao nas abas do topo */
+.nav-tabs button .nav-badge {
+  background: var(--red); color: #fff; font-size: 11px; font-weight: 700;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center; margin-left: 6px;
+  vertical-align: middle;
+}
 
 /* ---------- Viewer (imagem / pdf, sem download) ---------- */
 .viewer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.9); z-index: 100; display: flex; flex-direction: column; }

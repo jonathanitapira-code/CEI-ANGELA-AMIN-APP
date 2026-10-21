@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<title>Como reservar a sala de reuniões — Colônia de Pescadores Z-13</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; background: #f4f5f7;
+    font-family: 'Segoe UI', Arial, Helvetica, sans-serif; color: #333;
+  }
+  .page {
+    width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff;
+    padding: 16mm 18mm; position: relative;
+  }
+  .header { display: flex; align-items: center; gap: 16px; border-bottom: 4px solid #d13b2e; padding-bottom: 14px; margin-bottom: 22px; }
+  .header svg { width: 58px; height: 70px; flex-shrink: 0; }
+  .header h1 { margin: 0; font-size: 22px; color: #2f4a63; line-height: 1.25; }
+  .header p { margin: 4px 0 0; font-size: 13px; color: #777; }
+  .intro { font-size: 14px; line-height: 1.6; color: #444; margin-bottom: 26px; }
+  .intro b { color: #d13b2e; }
+  .steps { display: flex; flex-direction: column; gap: 16px; }
+  .step { display: flex; gap: 14px; align-items: flex-start; }
+  .step-num {
+    flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; background: #2f4a63;
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 700;
+  }
+  .step-body { flex: 1; background: #f8f9fb; border: 1px solid #e2e4e8; border-radius: 10px; padding: 12px 16px; }
+  .step-body h3 { margin: 0 0 4px; font-size: 15px; color: #2f4a63; }
+  .step-body p { margin: 0; font-size: 13.5px; line-height: 1.55; color: #444; }
+  .step-body .emoji { font-size: 18px; margin-right: 6px; }
+  .highlight-box {
+    margin-top: 24px; background: #fff4f2; border: 1px solid #f1c3bd; border-radius: 10px;
+    padding: 14px 16px; font-size: 13px; color: #7a2e24; line-height: 1.55;
+  }
+  .highlight-box b { color: #d13b2e; }
+  .footer-note { margin-top: 30px; font-size: 12px; color: #888; text-align: center; border-top: 1px solid #e2e4e8; padding-top: 12px; }
+  .badge-legend { display: inline-block; padding: 1px 8px; border-radius: 10px; color: #fff; font-size: 11px; font-weight: 600; }
+  .badge-emprestimo { background: #3fa845; }
+  .badge-aluguel { background: #2f6fed; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <svg viewBox="0 0 40 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M20 2 L36 9 L36 24 C36 36 29 44 20 46 C11 44 4 36 4 24 L4 9 Z" fill="#2f4a63"/>
+        <path d="M20 5 L33 10.5 L33 24 C33 34 27 40.5 20 42.5 C13 40.5 7 34 7 24 L7 10.5 Z" fill="none" stroke="#fff" stroke-width="1" opacity="0.85"/>
+        <g fill="#fff">
+          <path transform="translate(28,24)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(25.66,29.66)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(20,32)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(14.34,29.66)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(12,24)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(14.34,18.34)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(20,16)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(25.66,18.34)" d="M0,-3 L0.71,-0.97 L2.85,-0.93 L1.14,0.37 L1.76,2.43 L0,1.2 L-1.76,2.43 L-1.14,0.37 L-2.85,-0.93 L-0.71,-0.97 Z"/>
+          <path transform="translate(20,24)" d="M0,-5 L1.18,-1.62 L4.76,-1.55 L1.90,0.62 L2.94,4.05 L0,2 L-2.94,4.05 L-1.90,0.62 L-4.76,-1.55 L-1.18,-1.62 Z"/>
+        </g>
+      </svg>
+      <div>
+        <h1>Como reservar a sala de reuniões<br/>Colônia de Pescadores Z-13</h1>
+        <p>Passo a passo pelo aplicativo da CEI Ângela Amin — não precisa ter conta nem senha</p>
+      </div>
+    </div>
+
+    <div class="intro">
+      A sala de reuniões da Colônia de Pescadores Z-13 pode ser reservada por qualquer pessoa, direto pelo celular
+      ou computador, <b>sem precisar criar conta nem senha</b> no aplicativo da creche. O pedido só fica confirmado
+      depois que alguém da Direção da creche autorizar — por isso é importante enviar o pedido com antecedência.
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3><span class="emoji">🌐</span>Abra o aplicativo da creche</h3>
+          <p>No celular ou computador, abra o link do aplicativo da CEI Ângela Amin. Você vai cair direto na tela de login — não precisa digitar telefone nem senha para o próximo passo.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3><span class="emoji">🛡️</span>Clique em "Colônia de Pescadores Z-13"</h3>
+          <p>Bem embaixo do botão vermelho "Entrar", tem um botão com o brasão da Colônia. Clique nele para abrir a tela de reserva da sala.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3><span class="emoji">📅</span>Confira as datas já reservadas</h3>
+          <p>Antes de pedir, dá uma olhada na lista "Datas já reservadas" (separada por mês) para não escolher um dia e horário que já está ocupado.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h3><span class="emoji">📝</span>Clique em "+ Solicitar reserva da sala"</h3>
+          <p>Preencha: seu nome, telefone para contato (opcional), para qual entidade/grupo é a reserva, e se é
+            <span class="badge-legend badge-emprestimo">Empréstimo</span> (sem custo) ou
+            <span class="badge-legend badge-aluguel">Aluguel</span>. Depois, informe a data e o horário de início e de fim.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <h3><span class="emoji">🔁</span>Vai usar a sala várias vezes? Marque "Repetir semanalmente"</h3>
+          <p>Se for usar a sala todo sábado (ou outro dia fixo), marque essa opção e escolha até quando repetir — o pedido é enviado automaticamente para todas as datas de uma vez.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <h3><span class="emoji">✅</span>Envie e aguarde a confirmação</h3>
+          <p>Clique em "Enviar solicitação". O pedido fica pendente até alguém da Direção da creche confirmar. Você pode voltar nessa mesma tela mais tarde e ver se a sua reserva já apareceu na lista "Datas já reservadas".</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="highlight-box">
+      <b>Atenção:</b> o pedido só garante a sala depois de <b>confirmado</b> pela Direção da creche. Se a data/horário
+      escolhido já tiver uma reserva confirmada, o aplicativo avisa na hora e pede para escolher outra data ou horário.
+    </div>
+
+    <div class="footer-note">
+      CEI Ângela Amin · Colônia de Pescadores Z-13 · Imbituba - SC
+    </div>
+  </div>
+</body>
+</html>
