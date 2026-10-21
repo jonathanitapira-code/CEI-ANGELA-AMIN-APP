@@ -415,6 +415,50 @@ if (!calendarColumns.includes('turma_id')) {
   db.exec('ALTER TABLE calendar_events ADD COLUMN turma_id INTEGER');
 }
 
+// Varias turmas por recado / por evento do calendario (antes era uma so, na
+// coluna turma_id - que continua existindo e e lida como "a primeira turma"
+// em registros antigos).
+db.exec(`
+CREATE TABLE IF NOT EXISTS announcement_turmas (
+  announcement_id INTEGER NOT NULL REFERENCES announcements(id),
+  turma_id INTEGER NOT NULL REFERENCES turmas(id),
+  PRIMARY KEY (announcement_id, turma_id)
+);
+CREATE TABLE IF NOT EXISTS calendar_event_turmas (
+  event_id INTEGER NOT NULL REFERENCES calendar_events(id),
+  turma_id INTEGER NOT NULL REFERENCES turmas(id),
+  PRIMARY KEY (event_id, turma_id)
+);
+`);
+
+// Le a lista de turmas escolhidas (array de ids, ou um unico id legado) e
+// devolve so os ids que existem de verdade, sem repetir.
+function parseTurmaIdsInput(body) {
+  let raw = body.turmaIds;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch (e) { raw = raw.split(',').map(s => s.trim()).filter(Boolean); }
+  }
+  if (!Array.isArray(raw)) raw = body.turmaId ? [body.turmaId] : [];
+  const ids = [...new Set(raw.map(Number).filter(n => Number.isInteger(n) && n > 0))];
+  return ids.filter(id => db.prepare('SELECT 1 FROM turmas WHERE id = ?').get(id));
+}
+function getAnnouncementTurmaIds(a) {
+  const ids = db.prepare('SELECT turma_id FROM announcement_turmas WHERE announcement_id = ?').all(a.id).map(r => r.turma_id);
+  if (!ids.length && a.turma_id) ids.push(a.turma_id);
+  return ids;
+}
+function getCalendarEventTurmaIds(e) {
+  const ids = db.prepare('SELECT turma_id FROM calendar_event_turmas WHERE event_id = ?').all(e.id).map(r => r.turma_id);
+  if (!ids.length && e.turma_id) ids.push(e.turma_id);
+  return ids;
+}
+function turmaNamesByIds(ids) {
+  return ids.map(id => {
+    const t = db.prepare('SELECT name FROM turmas WHERE id = ?').get(id);
+    return t ? t.name : null;
+  }).filter(Boolean);
+}
+
 // ---------------------------------------------------------------------------
 // App / middlewares
 // ---------------------------------------------------------------------------
@@ -651,8 +695,11 @@ function getPollPayload(pollId, forUserId) {
 // o recado, que nao precisa confirmar o proprio aviso.
 function getAnnouncementAudienceUserIds(announcement) {
   let rows;
-  if (announcement.audience_type === 'turma' && announcement.turma_id) {
-    rows = db.prepare('SELECT user_id as id FROM turma_members WHERE turma_id = ?').all(announcement.turma_id);
+  const turmaIds = announcement.audience_type === 'turma' ? getAnnouncementTurmaIds(announcement) : [];
+  if (turmaIds.length) {
+    rows = db.prepare(
+      `SELECT DISTINCT user_id as id FROM turma_members WHERE turma_id IN (${turmaIds.map(() => '?').join(',')})`
+    ).all(...turmaIds);
   } else {
     rows = db.prepare('SELECT id FROM users WHERE active = 1').all();
   }
@@ -1088,6 +1135,8 @@ app.delete('/api/turmas/:id', requireAuth, requireRole(...TURMA_MANAGE_ROLES), (
     messages.forEach((m) => db.prepare('DELETE FROM message_reactions WHERE message_id = ?').run(m.id));
     db.prepare('DELETE FROM messages WHERE turma_id = ?').run(turma.id);
     db.prepare('DELETE FROM turma_members WHERE turma_id = ?').run(turma.id);
+    db.prepare('DELETE FROM announcement_turmas WHERE turma_id = ?').run(turma.id);
+    db.prepare('DELETE FROM calendar_event_turmas WHERE turma_id = ?').run(turma.id);
     db.prepare('DELETE FROM turmas WHERE id = ?').run(turma.id);
   });
   runDelete();
@@ -2085,7 +2134,7 @@ function getAnnouncementAttachment(a) {
 // Cria um recado novo (texto e/ou uma imagem/PDF - "banner") e avisa ao vivo
 // (via socket) quem precisa ver.
 app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), upload.single('file'), async (req, res) => {
-  const { message, audienceType, turmaId } = req.body;
+  const { message, audienceType } = req.body;
   const hasText = message && message.trim();
   const hasFile = !!req.file;
   if (!hasText && !hasFile) {
@@ -2096,10 +2145,11 @@ app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), uploa
     return res.status(400).json({ error: 'Escolha para quem e o recado' });
   }
   let resolvedTurmaId = null;
+  let resolvedTurmaIds = [];
   if (audienceType === 'turma') {
-    const turma = db.prepare('SELECT id FROM turmas WHERE id = ?').get(turmaId);
-    if (!turma) return res.status(400).json({ error: 'Turma invalida' });
-    resolvedTurmaId = turma.id;
+    resolvedTurmaIds = parseTurmaIdsInput(req.body);
+    if (!resolvedTurmaIds.length) return res.status(400).json({ error: 'Escolha pelo menos uma turma' });
+    resolvedTurmaId = resolvedTurmaIds[0]; // primeira, so por compatibilidade com a coluna antiga
   }
   const info = db.prepare(`
     INSERT INTO announcements (message, created_by, audience_type, turma_id, attachment_filename, attachment_original_name, attachment_mime, attachment_kind)
@@ -2114,6 +2164,8 @@ app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), uploa
     hasFile ? req.file.mimetype : null,
     hasFile ? (req.file.mimetype === 'application/pdf' ? 'pdf' : 'imagem') : null
   );
+  const insertTurma = db.prepare('INSERT OR IGNORE INTO announcement_turmas (announcement_id, turma_id) VALUES (?, ?)');
+  resolvedTurmaIds.forEach(tid => insertTurma.run(info.lastInsertRowid, tid));
   const announcement = db.prepare('SELECT * FROM announcements WHERE id = ?').get(info.lastInsertRowid);
 
   const audienceIds = getAnnouncementAudienceUserIds(announcement);
@@ -2128,7 +2180,7 @@ app.post('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), uploa
   // pendente assim que abrir o app, via GET /api/recados/pending).
   audienceIds.forEach((uid) => io.to('user_' + uid).emit('new_recado', payload));
 
-  res.json({ announcement: { ...payload, audienceType, turmaId: resolvedTurmaId, audienceCount: audienceIds.length } });
+  res.json({ announcement: { ...payload, audienceType, turmaId: resolvedTurmaId, turmaIds: resolvedTurmaIds, audienceCount: audienceIds.length } });
 });
 
 // Recados pendentes (ainda sem ciencia) do usuario logado, do mais antigo
@@ -2137,9 +2189,11 @@ app.get('/api/recados/pending', requireAuth, (req, res) => {
   const candidates = db.prepare(`
     SELECT * FROM announcements
     WHERE canceled_at IS NULL AND created_by != ?
-      AND (audience_type = 'all' OR turma_id IN (SELECT turma_id FROM turma_members WHERE user_id = ?))
+      AND (audience_type = 'all'
+           OR turma_id IN (SELECT turma_id FROM turma_members WHERE user_id = ?)
+           OR id IN (SELECT announcement_id FROM announcement_turmas WHERE turma_id IN (SELECT turma_id FROM turma_members WHERE user_id = ?)))
     ORDER BY created_at ASC
-  `).all(req.user.id, req.user.id);
+  `).all(req.user.id, req.user.id, req.user.id);
   const ackedIds = new Set(
     db.prepare('SELECT announcement_id FROM announcement_acks WHERE user_id = ?').all(req.user.id).map(r => r.announcement_id)
   );
@@ -2205,11 +2259,8 @@ app.get('/api/recados', requireAuth, requireRole(...RECADO_CREATE_ROLES), (req, 
   const announcements = rows.map((a) => {
     const author = db.prepare('SELECT name FROM users WHERE id = ?').get(a.created_by);
     const acks = getAnnouncementAcksPayload(a);
-    let turmaName = null;
-    if (a.turma_id) {
-      const t = db.prepare('SELECT name FROM turmas WHERE id = ?').get(a.turma_id);
-      turmaName = t ? t.name : null;
-    }
+    const turmaNames = a.audience_type === 'turma' ? turmaNamesByIds(getAnnouncementTurmaIds(a)) : [];
+    const turmaName = turmaNames.length ? turmaNames.join(', ') : null;
     return {
       id: a.id, message: a.message, attachment: getAnnouncementAttachment(a),
       createdByName: author ? author.name : '', createdAt: a.created_at,
@@ -2660,33 +2711,33 @@ app.delete('/api/cardapio/:id', requireAuth, requireRole(...CARDAPIO_ROLES), (re
 // so aparece pra quem e dessa turma ou pra quem edita o calendario/Gestor.
 // Evento sem turma (turma_id NULL) aparece pra todo mundo.
 function canSeeCalendarEvent(e, user) {
-  if (!e.turma_id) return true;
+  const turmaIds = getCalendarEventTurmaIds(e);
+  if (!turmaIds.length) return true;
   if (user.role === 'gestor' || CALENDARIO_EDIT_ROLES.includes(user.role)) return true;
-  return !!isTurmaMember(e.turma_id, user.id);
+  return turmaIds.some(tid => !!isTurmaMember(tid, user.id));
 }
 
 function calendarEventPayload(e) {
-  let turmaName = null;
-  if (e.turma_id) {
-    const t = db.prepare('SELECT name FROM turmas WHERE id = ?').get(e.turma_id);
-    turmaName = t ? t.name : null;
-  }
+  const turmaIds = getCalendarEventTurmaIds(e);
+  const turmaNames = turmaNamesByIds(turmaIds);
   return {
     id: e.id, date: e.date, title: e.title, description: e.description, authorName: e.author_name,
-    noClass: !!e.no_class, turmaId: e.turma_id || null, turmaName
+    noClass: !!e.no_class, turmaIds, turmaNames,
+    turmaId: turmaIds[0] || null, turmaName: turmaNames.length ? turmaNames.join(', ') : null
   };
 }
 
-// Valida e normaliza os campos novos (dia sem aula + turma opcional).
+// Valida e normaliza os campos novos (dia sem aula + turmas opcionais; lista
+// vazia = todas as turmas).
 function parseCalendarExtras(body) {
   const noClass = body.noClass ? 1 : 0;
-  let turmaId = null;
-  if (body.turmaId) {
-    const turma = db.prepare('SELECT id FROM turmas WHERE id = ?').get(body.turmaId);
-    if (!turma) return { error: 'Turma invalida' };
-    turmaId = turma.id;
-  }
-  return { noClass, turmaId };
+  const turmaIds = parseTurmaIdsInput(body);
+  return { noClass, turmaIds, turmaId: turmaIds[0] || null };
+}
+function saveCalendarEventTurmas(eventId, turmaIds) {
+  db.prepare('DELETE FROM calendar_event_turmas WHERE event_id = ?').run(eventId);
+  const ins = db.prepare('INSERT OR IGNORE INTO calendar_event_turmas (event_id, turma_id) VALUES (?, ?)');
+  turmaIds.forEach(tid => ins.run(eventId, tid));
 }
 
 // Todo mundo logado pode ver (respeitando eventos de turma especifica).
@@ -2718,10 +2769,10 @@ app.post('/api/calendario', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES), 
     return res.status(400).json({ error: 'Informe um titulo para o evento' });
   }
   const extras = parseCalendarExtras(req.body);
-  if (extras.error) return res.status(400).json({ error: extras.error });
   const info = db.prepare(
     'INSERT INTO calendar_events (date, title, description, created_by, no_class, turma_id) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(date, title.trim(), (description || '').trim() || null, req.user.id, extras.noClass, extras.turmaId);
+  saveCalendarEventTurmas(info.lastInsertRowid, extras.turmaIds);
   const row = db.prepare(`
     SELECT e.*, u.name as author_name FROM calendar_events e JOIN users u ON u.id = e.created_by WHERE e.id = ?
   `).get(info.lastInsertRowid);
@@ -2740,9 +2791,9 @@ app.put('/api/calendario/:id', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES
     return res.status(400).json({ error: 'Informe um titulo para o evento' });
   }
   const extras = parseCalendarExtras(req.body);
-  if (extras.error) return res.status(400).json({ error: extras.error });
   db.prepare('UPDATE calendar_events SET date = ?, title = ?, description = ?, no_class = ?, turma_id = ? WHERE id = ?')
     .run(date, title.trim(), (description || '').trim() || null, extras.noClass, extras.turmaId, item.id);
+  saveCalendarEventTurmas(item.id, extras.turmaIds);
   io.emit('nav_refresh', { what: 'calendario' });
   res.json({ ok: true });
 });
@@ -2776,6 +2827,7 @@ app.get('/api/nav-badges', requireAuth, (req, res) => {
 app.delete('/api/calendario/:id', requireAuth, requireRole(...CALENDARIO_EDIT_ROLES), (req, res) => {
   const item = db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(req.params.id);
   if (!item) return res.status(404).json({ error: 'Evento nao encontrado' });
+  db.prepare('DELETE FROM calendar_event_turmas WHERE event_id = ?').run(item.id);
   db.prepare('DELETE FROM calendar_events WHERE id = ?').run(item.id);
   res.json({ ok: true });
 });

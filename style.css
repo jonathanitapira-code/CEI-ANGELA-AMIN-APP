@@ -361,6 +361,11 @@ table.fin-table td.amount-receita, table.fin-table td.amount-despesa { font-weig
 .cal-agenda-date { font-weight: 700; min-width: 44px; }
 .cal-agenda-sub { font-size: 12px; color: var(--gray-light); }
 
+/* lista de turmas com caixinhas (recados / calendario) */
+.turma-check-list { max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.turma-check-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 14px; color: var(--gray); cursor: pointer; }
+.turma-check-row input { width: auto; margin: 0; }
+
 /* numerinho de notificacao nas abas do topo */
 .nav-tabs button .nav-badge {
   background: var(--red); color: #fff; font-size: 11px; font-weight: 700;

@@ -2165,6 +2165,33 @@
     modal.dataset.recadoId = recadoId;
   }
 
+  // Lista de turmas com caixinhas (marcar mais de uma) + botao "Selecionar todas".
+  // Usado nos recados e no calendario. Os botoes sao ligados por clique
+  // delegado no document, entao funciona em qualquer modal.
+  function turmaCheckboxListHtml(id, turmas, selectedIds) {
+    const sel = new Set((selectedIds || []).map(Number));
+    if (!turmas.length) return '<p style="font-size:13px;color:#999">Nenhuma turma encontrada.</p>';
+    return `<div class="turma-check-list" id="${id}">
+      <button type="button" class="btn ghost turma-check-all" data-list="${id}" style="padding:2px 10px;font-size:12px;margin-bottom:6px">Selecionar todas</button>
+      ${turmas.map(t => `<label class="turma-check-row"><input type="checkbox" value="${t.id}" ${sel.has(Number(t.id)) ? 'checked' : ''} /> <span>${escapeHtml(t.name)}</span></label>`).join('')}
+    </div>`;
+  }
+  function getCheckedTurmaIds(id) {
+    const box = document.getElementById(id);
+    if (!box) return [];
+    return Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(i => Number(i.value));
+  }
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.turma-check-all');
+    if (!btn) return;
+    const box = document.getElementById(btn.dataset.list);
+    if (!box) return;
+    const boxes = Array.from(box.querySelectorAll('input[type="checkbox"]'));
+    const allChecked = boxes.every(b => b.checked);
+    boxes.forEach(b => { b.checked = !allChecked; });
+    btn.textContent = allChecked ? 'Selecionar todas' : 'Limpar seleção';
+  });
+
   document.getElementById('btn-new-recado').addEventListener('click', async () => {
     let turmas = [];
     try {
@@ -2182,11 +2209,11 @@
       <div class="field"><label>Para quem</label>
         <select id="recado-audience">
           <option value="all">Todo mundo</option>
-          <option value="turma">Uma turma especifica</option>
+          <option value="turma">Turmas especificas (pode marcar mais de uma)</option>
         </select>
       </div>
-      <div class="field hidden" id="recado-turma-field"><label>Turma</label>
-        <select id="recado-turma">${turmas.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')}</select>
+      <div class="field hidden" id="recado-turma-field"><label>Turmas</label>
+        ${turmaCheckboxListHtml('recado-turmas', turmas, [])}
       </div>
       <div class="error-msg" id="recado-error"></div>
       <div class="modal-actions">
@@ -2210,19 +2237,19 @@
       const message = document.getElementById('recado-text').value.trim();
       const file = document.getElementById('recado-file').files[0] || null;
       const audienceType = document.getElementById('recado-audience').value;
-      const turmaId = audienceType === 'turma' ? Number(document.getElementById('recado-turma').value) : null;
+      const turmaIds = audienceType === 'turma' ? getCheckedTurmaIds('recado-turmas') : [];
       if (!message && !file) {
         document.getElementById('recado-error').textContent = 'Escreva o recado ou anexe uma imagem/PDF';
         return;
       }
-      if (audienceType === 'turma' && !turmaId) {
-        document.getElementById('recado-error').textContent = 'Escolha uma turma';
+      if (audienceType === 'turma' && !turmaIds.length) {
+        document.getElementById('recado-error').textContent = 'Marque pelo menos uma turma';
         return;
       }
       const fd = new FormData();
       fd.append('message', message);
       fd.append('audienceType', audienceType);
-      if (turmaId) fd.append('turmaId', turmaId);
+      if (turmaIds.length) fd.append('turmaIds', JSON.stringify(turmaIds));
       if (file) fd.append('file', file);
       try {
         await api('/api/recados', { method: 'POST', body: fd });
@@ -2873,8 +2900,8 @@
         <label style="margin:0" for="evento-noclass">Dia sem aula (aparece em laranja no calendário)</label>
       </div>
       <div class="field">
-        <label>Vale para qual turma?</label>
-        <select id="evento-turma"><option value="">Todas as turmas</option></select>
+        <label>Vale para quais turmas? (pode marcar mais de uma; nenhuma marcada = todas as turmas)</label>
+        <div id="evento-turma-box"><p style="font-size:13px;color:#999">Carregando turmas...</p></div>
       </div>
       <div class="error-msg" id="evento-error"></div>
       <div class="modal-actions">
@@ -2885,17 +2912,15 @@
     `);
     document.getElementById('cancel-evento').addEventListener('click', closeModal);
     // Lista de turmas pro "Vale para qual turma?" (so Direcao/Gestor chegam aqui)
+    const confirmBtn = document.getElementById('confirm-evento');
+    confirmBtn.disabled = true; // so libera depois de carregar as turmas (evita perder a selecao ao editar)
     api('/api/turmas/all').then((data) => {
-      const sel = document.getElementById('evento-turma');
-      if (!sel) return;
-      data.turmas.forEach(t => {
-        const opt = document.createElement('option');
-        opt.value = t.id;
-        opt.textContent = t.name;
-        sel.appendChild(opt);
-      });
-      if (ev && ev.turmaId) sel.value = String(ev.turmaId);
-    }).catch(() => {});
+      const box = document.getElementById('evento-turma-box');
+      if (box) box.innerHTML = turmaCheckboxListHtml('evento-turmas', data.turmas, ev ? (ev.turmaIds || (ev.turmaId ? [ev.turmaId] : [])) : []);
+    }).catch(() => {
+      const box = document.getElementById('evento-turma-box');
+      if (box) box.innerHTML = '<p style="font-size:13px;color:#999">Nao foi possivel carregar as turmas (vale para todas).</p>';
+    }).finally(() => { confirmBtn.disabled = false; });
     const delBtn = document.getElementById('delete-evento');
     if (delBtn) delBtn.addEventListener('click', async () => {
       if (!confirm('Excluir este evento do calendário?')) return;
@@ -2914,7 +2939,7 @@
         title: document.getElementById('evento-title').value.trim(),
         description: document.getElementById('evento-desc').value.trim(),
         noClass: document.getElementById('evento-noclass').checked,
-        turmaId: document.getElementById('evento-turma').value || null
+        turmaIds: getCheckedTurmaIds('evento-turmas')
       };
       if (!body.title && body.noClass) body.title = 'Não haverá aula';
       if (!body.title) { errBox.textContent = 'Informe um título para o evento'; return; }
