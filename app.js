@@ -242,6 +242,12 @@
     return `${data}, ${r.startTime} às ${r.endTime}`;
   }
 
+  // Data de hoje (AAAA-MM-DD) no relogio do aparelho
+  function salaHojeStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
   function fmtDateBRShort(iso) {
     const [y, m, d] = iso.split('-');
     return `${d}/${m}/${y}`;
@@ -265,11 +271,112 @@
     return [...grupos.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }
 
+  // ------------------------------------------------------------------
+  // Agenda mensal da sala (grade de dias/semanas) - usada na tela publica e na gestao
+  // ------------------------------------------------------------------
+  const salaAgendaState = {};
+  function isoFromDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  function renderSalaAgenda(containerId, reservas, adminMode) {
+    const box = document.getElementById(containerId);
+    if (!box) return;
+    const hojeStr = salaHojeStr();
+    let st = salaAgendaState[containerId];
+    if (!st) {
+      const now = new Date();
+      st = salaAgendaState[containerId] = { y: now.getFullYear(), m: now.getMonth(), sel: hojeStr };
+    }
+    st.reservas = reservas; st.admin = !!adminMode;
+
+    // dia -> reservas daquele dia (cobre reservas de varios dias)
+    const byDay = new Map();
+    reservas.forEach((r) => {
+      const d = new Date(r.startDate + 'T12:00:00'); const end = new Date(r.endDate + 'T12:00:00');
+      for (let n = 0; d <= end && n < 62; n++, d.setDate(d.getDate() + 1)) {
+        const k = isoFromDate(d);
+        if (!byDay.has(k)) byDay.set(k, []);
+        byDay.get(k).push(r);
+      }
+    });
+
+    const nomesMes = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+    const primeiro = new Date(st.y, st.m, 1);
+    const diasNoMes = new Date(st.y, st.m + 1, 0).getDate();
+    const offset = primeiro.getDay();
+    let cells = '';
+    for (let i = 0; i < offset; i++) cells += '<div class="sala-ag-cell sala-ag-empty"></div>';
+    for (let d = 1; d <= diasNoMes; d++) {
+      const iso = `${st.y}-${String(st.m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const rs = (byDay.get(iso) || []).slice().sort((a, b) => a.startTime.localeCompare(b.startTime));
+      const passado = iso < hojeStr;
+      const conf = rs.filter(r => r.status === 'confirmado').length;
+      const pend = rs.filter(r => r.status === 'pendente').length;
+      let cls = 'sala-ag-cell';
+      if (passado) cls += ' passado';
+      else if (conf) cls += ' ocupado';
+      else if (pend) cls += ' pendente';
+      else cls += ' livre';
+      if (iso === hojeStr) cls += ' hoje';
+      if (iso === st.sel) cls += ' sel';
+      const chips = rs.slice(0, 2).map(r => `<span class="sala-ag-chip ${r.status === 'pendente' ? 'pend' : 'conf'}">${escapeHtml(r.startTime)}</span>`).join('');
+      const mais = rs.length > 2 ? `<span class="sala-ag-mais">+${rs.length - 2}</span>` : '';
+      cells += `<div class="${cls}" data-iso="${iso}"><span class="sala-ag-num">${d}</span>${chips}${mais}</div>`;
+    }
+    const dow = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(s => `<div class="sala-ag-dow">${s}</div>`).join('');
+
+    // detalhe do dia escolhido
+    let detalhe = '';
+    if (st.sel) {
+      const rs = (byDay.get(st.sel) || []).slice().sort((a, b) => a.startTime.localeCompare(b.startTime));
+      const dt = new Date(st.sel + 'T12:00:00');
+      const nomeDia = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][dt.getDay()];
+      let corpo;
+      if (!rs.length) {
+        corpo = st.sel < hojeStr ? '<div class="sala-ag-livre-msg" style="color:#888">Sem reservas neste dia.</div>' : '<div class="sala-ag-livre-msg">✔ Dia livre - nenhuma reserva.</div>';
+      } else {
+        corpo = rs.map(r => `<div class="sala-ag-item ${r.status === 'pendente' ? 'pend' : 'conf'}">
+          <b>${escapeHtml(r.entityName)}</b> <span class="sala-reserva-tipo-badge tipo-${r.tipo}">${salaReservaTipoLabel(r.tipo)}</span>
+          ${r.status === 'pendente' ? '<span class="sala-ag-pend-tag">aguardando confirmação</span>' : ''}
+          <div class="sala-reserva-periodo">${r.startTime} às ${r.endTime}${r.startDate !== r.endDate ? ' · ' + salaReservaPeriodoLabel(r).split(',')[0] : ''}</div>
+        </div>`).join('');
+      }
+      detalhe = `<div class="sala-ag-detalhe"><h4>${nomeDia}, ${fmtDateBRShort(st.sel)}</h4>${corpo}</div>`;
+    }
+
+    box.innerHTML = `<div class="sala-ag">
+      <div class="sala-ag-head">
+        <button type="button" class="btn ghost" data-nav="-1">‹</button>
+        <b>${nomesMes[st.m]} de ${st.y}</b>
+        <button type="button" class="btn ghost" data-nav="1">›</button>
+      </div>
+      <div class="sala-ag-grid">${dow}${cells}</div>
+      <div class="sala-ag-legenda">
+        <span><i class="lg livre"></i>Livre</span>
+        <span><i class="lg ocupado"></i>Ocupado</span>
+        ${adminMode ? '<span><i class="lg pendente"></i>Pendente</span>' : ''}
+        <span><i class="lg passado"></i>Já passou</span>
+      </div>
+      ${detalhe}
+    </div>`;
+    box.querySelectorAll('[data-nav]').forEach((b) => b.addEventListener('click', () => {
+      st.m += Number(b.dataset.nav);
+      if (st.m < 0) { st.m = 11; st.y -= 1; } else if (st.m > 11) { st.m = 0; st.y += 1; }
+      renderSalaAgenda(containerId, st.reservas, st.admin);
+    }));
+    box.querySelectorAll('[data-iso]').forEach((c) => c.addEventListener('click', () => {
+      st.sel = c.dataset.iso;
+      renderSalaAgenda(containerId, st.reservas, st.admin);
+    }));
+  }
+
   async function loadSalaReservasPublicas() {
     const list = document.getElementById('sala-publica-list');
     list.innerHTML = '<div class="empty-state">Carregando...</div>';
     try {
       const data = await api('/api/sala-reservas/public');
+      data.reservas = data.reservas.filter(r => r.endDate >= salaHojeStr()); // datas passadas nao aparecem mais
+      renderSalaAgenda('sala-publica-agenda', data.reservas, false);
       if (!data.reservas.length) {
         list.innerHTML = '<div class="empty-state">Nenhuma reserva confirmada por enquanto.</div>';
         return;
@@ -3212,9 +3319,16 @@
       document.getElementById('sala-reservas-historico-list').innerHTML = '';
       return;
     }
-    const pendentes = reservas.filter(r => r.status === 'pendente');
-    const confirmadas = reservas.filter(r => r.status === 'confirmado');
-    const historico = reservas.filter(r => r.status === 'rejeitado' || r.status === 'cancelado');
+    // Datas que ja passaram saem das listas ativas e vao pro historico, junto
+    // com as canceladas/rejeitadas.
+    const hoje = salaHojeStr();
+    const passou = (r) => r.endDate < hoje;
+    const pendentes = reservas.filter(r => r.status === 'pendente' && !passou(r));
+    const confirmadas = reservas.filter(r => r.status === 'confirmado' && !passou(r));
+    const historico = reservas
+      .filter(r => r.status === 'rejeitado' || r.status === 'cancelado' || passou(r))
+      .sort((a, b) => (b.startDate + b.startTime).localeCompare(a.startDate + a.startTime));
+    renderSalaAgenda('sala-reservas-agenda', reservas.filter(r => r.status === 'pendente' || r.status === 'confirmado'), true);
     document.getElementById('sala-reservas-pendentes-title').textContent = `Pendentes${pendentes.length ? ' (' + pendentes.length + ')' : ''}`;
     renderSalaReservasPendentes(pendentes);
     renderSalaReservasConfirmadas(confirmadas);
@@ -3339,12 +3453,15 @@
     wrap.innerHTML = '';
     if (!historico.length) { wrap.innerHTML = '<div class="empty-state">Nada por aqui ainda.</div>'; return; }
     historico.slice(0, 100).forEach((r) => {
-      const statusLabel = r.status === 'rejeitado' ? 'Rejeitada' : 'Cancelada';
+      let statusLabel = r.status === 'rejeitado' ? 'Rejeitada' : 'Cancelada';
+      let statusClass = r.status;
+      if (r.status === 'confirmado') { statusLabel = 'Realizada'; statusClass = 'cancelado'; }
+      else if (r.status === 'pendente') { statusLabel = 'Expirada'; statusClass = 'cancelado'; }
       wrap.appendChild(el(`<div class="sala-reserva-row sala-reserva-row-historico">
         <div>
           <b>${escapeHtml(r.entityName)}</b>
           <span class="sala-reserva-tipo-badge tipo-${r.tipo}">${salaReservaTipoLabel(r.tipo)}</span>
-          <span class="sala-reserva-status-badge status-${r.status}">${statusLabel}</span>
+          <span class="sala-reserva-status-badge status-${statusClass}">${statusLabel}</span>
           <div class="sala-reserva-periodo">${salaReservaPeriodoLabel(r)}</div>
           <div class="sala-reserva-solicitante">Solicitado por ${escapeHtml(r.requesterName)}${r.decidedByName ? ' · decisao de ' + escapeHtml(r.decidedByName) : ''}</div>
         </div>
