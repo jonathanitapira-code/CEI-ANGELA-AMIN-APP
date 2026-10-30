@@ -304,3 +304,10 @@ O app instalado mostra no ícone a quantidade de pendências (mensagens não lid
 - A aba "Enquetes" foi unida à aba "Recados" (botões "+ Novo recado" e "+ Nova enquete"). Comportamento igual: aparece em tela cheia e só some quando a pessoa dá ciência / vota.
 - Direção/Gestor (ou quem criou) pode **apagar** recado ou enquete: some de vez para pais e gestão (confirmações, votos e anexo também são removidos do banco/disco). Recados/enquetes "cancelados" na versão antiga são removidos automaticamente na subida do servidor.
 - Fixar mensagem na turma agora pergunta **por quantos dias** (1 a 365, ou sem prazo). Coluna nova `messages.pinned_until` (migração automática). Vencido o prazo, volta à regra normal dos 5 dias.
+
+## Reservas da sala: datas passadas
+
+Reservas cuja data já passou saem das listas "Pendentes" e "Confirmadas" (e da lista pública da Colônia Z-13) e vão para o Histórico, no mesmo estilo cinza das canceladas, com a etiqueta "Realizada" (confirmadas) ou "Expirada" (pendentes que ninguém decidiu). O número da aba só conta pedidos pendentes de datas futuras.
+
+## Agenda mensal da sala (Colônia Z-13)
+Tela pública e aba de gestão mostram um calendário do mês (Dom–Sáb) com dias livres (verde), ocupados (vermelho), pendentes (laranja, só na gestão) e passados (cinza). Setas mudam o mês e, ao tocar num dia, aparecem as reservas dele com horários ou "Dia livre". Mudança só no front-end (index.html, app.js, style.css, sw.js).

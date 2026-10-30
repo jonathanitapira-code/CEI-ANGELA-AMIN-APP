@@ -505,3 +505,35 @@ form { margin: 0; }
 .poll-voters { font-size: 10px; color: var(--gray-light); margin-top: 4px; white-space: normal; }
 .poll-total { font-size: 11px; color: var(--gray-light); margin-top: 6px; text-align: right; }
 .poll-option-input { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-family: inherit; }
+
+/* Agenda mensal da sala */
+.sala-ag { background:#fff; border:1px solid var(--border); border-radius:12px; padding:10px; }
+.sala-ag-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.sala-ag-head .btn { padding:4px 14px; font-size:18px; line-height:1; }
+.sala-ag-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }
+.sala-ag-dow { text-align:center; font-size:11px; font-weight:700; color:var(--gray-light); padding:2px 0; }
+.sala-ag-cell { min-height:54px; border-radius:8px; padding:3px; font-size:11px; cursor:pointer; border:2px solid transparent; display:flex; flex-direction:column; gap:2px; overflow:hidden; }
+.sala-ag-empty { cursor:default; }
+.sala-ag-num { font-weight:700; font-size:13px; }
+.sala-ag-cell.livre { background:#e8f6e9; color:#256b2b; }
+.sala-ag-cell.ocupado { background:#fde4e1; color:#a42a1f; }
+.sala-ag-cell.pendente { background:#fff1dc; color:#a86212; }
+.sala-ag-cell.passado { background:#f0f1f3; color:#aaa; }
+.sala-ag-cell.hoje .sala-ag-num { text-decoration:underline; }
+.sala-ag-cell.hoje { border-color:var(--gray); }
+.sala-ag-cell.sel { border-color:var(--blue); box-shadow:0 0 0 1px var(--blue); }
+.sala-ag-chip { font-size:9px; border-radius:6px; padding:0 4px; color:#fff; width:fit-content; }
+.sala-ag-chip.conf { background:var(--red); }
+.sala-ag-chip.pend { background:var(--orange); }
+.sala-ag-mais { font-size:9px; }
+.sala-ag-legenda { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; margin-top:8px; color:var(--gray); }
+.sala-ag-legenda .lg { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:4px; vertical-align:-1px; }
+.sala-ag-legenda .lg.livre { background:#8fd196; } .sala-ag-legenda .lg.ocupado { background:#f2a59d; }
+.sala-ag-legenda .lg.pendente { background:#f5c98a; } .sala-ag-legenda .lg.passado { background:#d9dbe0; }
+.sala-ag-detalhe { margin-top:10px; padding-top:10px; border-top:1px solid var(--border); }
+.sala-ag-detalhe h4 { margin:0 0 6px; }
+.sala-ag-item { padding:8px 10px; border-radius:8px; margin-bottom:6px; border-left:4px solid var(--red); background:#fafafa; }
+.sala-ag-item.pend { border-left-color:var(--orange); }
+.sala-ag-pend-tag { font-size:11px; color:var(--orange); margin-left:6px; }
+.sala-ag-livre-msg { color:#256b2b; font-weight:600; }
+@media (max-width:480px){ .sala-ag-cell{ min-height:46px; } .sala-ag-chip{ display:none; } }
